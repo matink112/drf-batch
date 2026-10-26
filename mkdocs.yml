@@ -3,8 +3,8 @@ site_description: >-
   Batch-aware validation for Django REST Framework: collect every lookup once,
   validate the whole payload against memory, commit all-or-none.
 # TODO(maintainer): set to the published docs URL and repository.
-site_url: https://OWNER.github.io/drf-batch/
-repo_url: https://github.com/OWNER/drf-batch
+site_url: https://matink112.github.io/drf-batch/
+repo_url: https://github.com/matink112/drf-batch
 repo_name: drf-batch
 edit_uri: edit/main/docs/
 copyright: BSD-3-Clause

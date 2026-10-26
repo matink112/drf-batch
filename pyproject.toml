@@ -31,11 +31,10 @@ dependencies = [
 spectacular = ["drf-spectacular>=0.27"]
 
 [project.urls]
-# TODO(maintainer): point these at the public repository before publishing.
-Homepage = "https://github.com/OWNER/drf-batch"
-Repository = "https://github.com/OWNER/drf-batch"
-Issues = "https://github.com/OWNER/drf-batch/issues"
-Changelog = "https://github.com/OWNER/drf-batch/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/matink112/drf-batch"
+Repository = "https://github.com/matink112/drf-batch"
+Issues = "https://github.com/matink112/drf-batch/issues"
+Changelog = "https://github.com/matink112/drf-batch/blob/main/CHANGELOG.md"
 
 [dependency-groups]
 dev = [

@@ -7,7 +7,7 @@ all-or-none.
 `drf-batch` is to the write path what `drf-serializer-prefetch` is to the read
 path, and what DataLoader is to GraphQL.
 
-**Documentation:** guides, the API reference and the upgrade guide are in
+**Documentation:** guides and the API reference are in
 [`docs/`](docs/index.md) (build with `nox -s docs`).
 
 ```json
