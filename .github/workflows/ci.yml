@@ -1,0 +1,100 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --frozen
+      - run: uv run --frozen ruff check
+      - run: uv run --frozen ruff format --check
+
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --frozen
+      - run: uv run --frozen mypy
+
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv run --frozen --group docs mkdocs build --strict
+        env:
+          NO_MKDOCS_2_WARNING: "1"
+
+  test:
+    needs: [lint, typecheck]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Oldest supported everything.
+          - { python-version: "3.11", django: ">=5.2,<5.3", drf: ">=3.15,<3.16" }
+          - { python-version: "3.12", django: ">=5.2,<5.3", drf: ">=3.16" }
+          - { python-version: "3.12", django: ">=6.0,<6.1", drf: ">=3.16" }
+          - { python-version: "3.13", django: ">=6.1,<6.2", drf: ">=3.16" }
+          # Newest everything.
+          - { python-version: "3.14", django: ">=6.1,<6.2", drf: ">=3.16" }
+    env:
+      # tests/test_environment.py asserts the installed versions satisfy these.
+      DRF_BATCH_EXPECT_DJANGO: ${{ matrix.django }}
+      DRF_BATCH_EXPECT_DRF: ${{ matrix.drf }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      # `--with` layers the matrix pins over the locked environment;
+      # a plain `uv run` would re-sync to uv.lock and undo them.
+      - run: >-
+          uv run --frozen
+          --with "Django${{ matrix.django }}"
+          --with "djangorestframework${{ matrix.drf }}"
+          pytest
+
+  postgres:
+    needs: [lint, typecheck]
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: drf_batch
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s
+          --health-timeout 5s --health-retries 10
+    env:
+      DRF_BATCH_TEST_DB: postgres
+      PGHOST: localhost
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: drf_batch
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.13"
+      - run: uv run --frozen pytest
+
+  quickstart:
+    needs: [test]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.13"
+      - run: uv run --frozen python scripts/run_quickstart.py

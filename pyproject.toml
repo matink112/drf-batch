@@ -1,0 +1,150 @@
+[project]
+name = "drf-batch"
+description = "Batch-aware validation for Django REST Framework: collect every lookup once, validate the whole payload against memory, commit all-or-none."
+readme = "README.md"
+requires-python = ">=3.11"
+dynamic = ["version"]
+license = "BSD-3-Clause"
+license-files = ["LICENSE"]
+authors = [{ name = "matin" }]
+keywords = ["django", "djangorestframework", "batch", "bulk", "validation"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Framework :: Django",
+    "Framework :: Django :: 5.2",
+    "Framework :: Django :: 6.0",
+    "Framework :: Django :: 6.1",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Typing :: Typed",
+]
+dependencies = [
+    "Django>=5.2",
+    "djangorestframework>=3.15",
+]
+
+[project.optional-dependencies]
+spectacular = ["drf-spectacular>=0.27"]
+
+[project.urls]
+# TODO(maintainer): point these at the public repository before publishing.
+Homepage = "https://github.com/OWNER/drf-batch"
+Repository = "https://github.com/OWNER/drf-batch"
+Issues = "https://github.com/OWNER/drf-batch/issues"
+Changelog = "https://github.com/OWNER/drf-batch/blob/main/CHANGELOG.md"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-django>=4.9",
+    "pytest-cov>=6.0",
+    "mypy>=1.14",
+    "django-stubs>=5.0",
+    "djangorestframework-stubs>=3.16",
+    "ruff>=0.9",
+    "nox>=2024.10",
+    "hypothesis>=6.100",
+    "drf-spectacular>=0.27",
+    "psycopg[binary]>=3.2",
+    "commitizen>=4.10",
+    "pre-commit>=4.0",
+]
+docs = [
+    "mkdocs>=1.6,<2",
+    "mkdocs-material>=9.5",
+    "mkdocstrings[python]>=0.26",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "src/drf_batch/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/drf_batch"]
+
+# Explicit allowlist: the sdist must never pick up local/IDE files or
+# internal planning documents.
+[tool.hatch.build.targets.sdist]
+include = [
+    "src/drf_batch",
+    "tests",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "SECURITY.md",
+    "pyproject.toml",
+]
+
+# Versions come from Conventional Commit messages: `cz bump` picks the next
+# version, writes it here and into drf_batch.__version__ (which hatch reads),
+# updates CHANGELOG.md, commits, and tags vX.Y.Z. Pushing the tag publishes.
+[tool.commitizen]
+name = "cz_conventional_commits"
+version_provider = "commitizen"
+version = "0.0.0"
+version_files = ["src/drf_batch/__init__.py:__version__"]
+tag_format = "v$version"
+# Annotated, so `git push --follow-tags` pushes the tag with the bump commit.
+annotated_tag = true
+update_changelog_on_bump = true
+changelog_incremental = true
+# Before 1.0, a breaking change bumps the minor version, not the major.
+major_version_zero = true
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "ANN", "RUF"]
+# ANN401: a DRF/Django wrapper cannot avoid Any at the framework boundary.
+ignore = ["ANN401"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["ANN"]
+"tests/apps/demo/migrations/**" = ["E501", "RUF012"]
+"tests/apps/demo/**" = ["RUF012"]
+"scripts/quickstart/**" = ["RUF012"]
+
+[tool.django-stubs]
+django_settings_module = "tests.apps.demo.settings"
+
+[tool.mypy]
+python_version = "3.11"
+mypy_path = "src"
+files = ["src", "tests"]
+plugins = ["mypy_django_plugin.main"]
+disallow_untyped_defs = true
+check_untyped_defs = true
+warn_return_any = true
+no_implicit_optional = true
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+DJANGO_SETTINGS_MODULE = "tests.apps.demo.settings"
+addopts = "--cov=drf_batch --cov-report=term-missing --cov-fail-under=80"
+filterwarnings = [
+    # Worker threads close their database connections after every call
+    # (drf_batch.loop.to_thread): an unclosed connection is a leak...
+    "error::ResourceWarning",
+    # ...except that Django's SQLite backend never closes an *in-memory*
+    # database connection (DatabaseWrapper.close() skips it by design), so
+    # with the in-memory test database Python 3.13+ reports the worker
+    # threads' connections when they are garbage-collected. The PostgreSQL
+    # CI job runs without this artifact; tests/test_drf_integration.py
+    # asserts the close call itself.
+    "ignore:unclosed database:ResourceWarning",
+    "ignore:Exception ignored while finalizing database connection:pytest.PytestUnraisableExceptionWarning",
+]

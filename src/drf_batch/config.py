@@ -1,0 +1,76 @@
+"""Per-request configuration of a batch run.
+
+:class:`BatchConfig` bundles everything a :class:`~drf_batch.BatchListSerializer`
+needs beyond its child serializer: the operation, the write-path options, the
+collection hook, and the authorization inputs supplied by the view. It is
+immutable; :class:`~drf_batch.BatchMixin` builds one per request in
+``get_batch_config()``.
+"""
+
+from __future__ import annotations
+
+import enum
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
+
+from django.core.exceptions import ImproperlyConfigured
+from rest_framework import status
+
+if TYPE_CHECKING:
+    from django.db.models import QuerySet
+
+    from drf_batch.collectors import BatchCollector
+    from drf_batch.retry import RetryPolicy
+
+
+class BatchOperation(enum.StrEnum):
+    """The three batch operations, served on one ``/batch/`` route."""
+
+    CREATE = "create"
+    UPDATE = "update"
+    DESTROY = "destroy"
+
+
+@dataclass(frozen=True)
+class BatchConfig:
+    """Options for one batch run.
+
+    :param operation: create / update / destroy (a :class:`BatchOperation` or
+        its string value).
+    :param use_bulk: ``bulk_create`` / ``bulk_update`` / queryset delete
+        (default) instead of per-row ``create`` / ``update`` / ``delete()``.
+    :param bulk_size: chunk size for the bulk writes; ``None`` = one statement.
+    :param collector: optional full-replacement collection hook.
+    :param conflict_status: HTTP status of the conflict pass (default 409).
+    :param retry_policy: wraps the write; ``None`` runs it once.
+    :param queryset: the queryset update/destroy targets are resolved from.
+        :class:`~drf_batch.BatchMixin` passes ``view.get_queryset()``, so
+        ownership/tenant scoping applies; ``None`` falls back to the model's
+        default manager (standalone serializer use).
+    :param check_object: called with every update/destroy target; raising
+        ``PermissionDenied`` / ``NotAuthenticated`` makes that row a 403.
+        The mixin passes ``view.check_object_permissions``.
+    :param lock_targets: re-fetch update/destroy targets with
+        ``select_for_update()`` inside the write transaction.
+    """
+
+    operation: BatchOperation = BatchOperation.CREATE
+    use_bulk: bool = True
+    bulk_size: int | None = None
+    collector: BatchCollector | None = None
+    conflict_status: int = status.HTTP_409_CONFLICT
+    retry_policy: RetryPolicy | None = None
+    queryset: QuerySet[Any] | None = None
+    check_object: Callable[[Any], None] | None = None
+    lock_targets: bool = True
+
+    def __post_init__(self) -> None:
+        try:
+            operation = BatchOperation(self.operation)
+        except ValueError:
+            raise ImproperlyConfigured(
+                f"BatchConfig: unknown operation '{self.operation}' "
+                "(expected 'create', 'update', or 'destroy')."
+            ) from None
+        object.__setattr__(self, "operation", operation)

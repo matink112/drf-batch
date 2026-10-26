@@ -1,0 +1,12 @@
+# Install with `make hooks`. Uses the commitizen pinned in uv.lock, so the
+# hook and `cz bump` always agree on what a valid commit message is.
+default_install_hook_types: [commit-msg]
+
+repos:
+  - repo: local
+    hooks:
+      - id: commitizen
+        name: conventional commit message
+        entry: uv run --frozen cz check --allow-abort --commit-msg-file
+        language: system
+        stages: [commit-msg]

@@ -1,0 +1,19 @@
+.venv/
+dist/
+build/
+__pycache__/
+*.py[cod]
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+*.egg-info/
+.idea/
+.mcp.json
+.claude/
+.hypothesis/
+# Internal working notes: never published.
+REVIEW.md
+road_map.md
+initial_plan.md
+site/
