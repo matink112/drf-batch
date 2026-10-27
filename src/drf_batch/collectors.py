@@ -1,7 +1,7 @@
 """The collector hook: full-replacement collection for a batch request.
 
-Auto collection is the default (v0.3): the serializer's cached fields are
-fetched by the list serializer itself, in topological order. A
+Auto collection is the default: the serializer's cached fields are
+fetched by the list serializer itself, as a dependency graph. A
 :class:`BatchCollector` is a **full-replacement hook**: when
 ``batch_collector_class`` is set, its ``collect(keys, context)`` runs
 *instead of* auto collection and must return **every** map the fields need
@@ -13,12 +13,11 @@ raw rows), so a collector can no longer crash on malformed data.
 
 ``collect`` may be **synchronous** (the default; runs inline on the
 request thread, zero overhead) or **asynchronous** (``async def collect``;
-auto-detected and bridged to a process-wide event loop, with a
-``COLLECT_TIMEOUT`` guard). An async ``collect`` runs on the
-``drf-batch-loop`` thread, so Django ORM access inside it should go through
-``self.to_thread(...)`` (a worker thread whose connection is closed after
-the call) or an async driver; direct synchronous ORM calls from the loop
-thread work but keep that connection open for the process lifetime.
+auto-detected and bridged to an event loop, with a ``COLLECT_TIMEOUT``
+guard). An async ``collect`` runs on the event loop
+selected by ``EVENT_LOOP`` (see :mod:`drf_batch.loop`), so Django ORM access
+inside it should go through ``self.run_sync(...)`` / ``self.to_thread(...)``
+or an async driver; a direct synchronous ORM call blocks the loop.
 
 Update/destroy targets are **not** the collector's job: the pipeline
 resolves them from the view's (scoped) queryset before ``collect`` runs.
@@ -84,10 +83,25 @@ class BatchCollector:
         """Run ``func(*args, **kwargs)`` on the default thread pool.
 
         Use inside an async ``collect`` for blocking calls (notably Django
-        ORM queries). The call runs on its own connection, which is closed
-        afterwards (see :func:`drf_batch.loop.to_thread`).
+        ORM queries). The call runs on the worker's own connection, managed
+        like a request's (``CONN_MAX_AGE`` applies; see
+        :func:`drf_batch.loop.to_thread`), so it does not see the request's
+        uncommitted writes: use :meth:`run_sync` for that.
         """
         return await loop.to_thread(func, *args, **kwargs)
+
+    async def run_sync(
+        self, func: Callable[..., Any], /, *args: Any, **kwargs: Any
+    ) -> Any:
+        """Run ``func(*args, **kwargs)`` where it sees the request's database.
+
+        When the request's connection is in a transaction
+        (``ATOMIC_REQUESTS``, an outer ``atomic()``, a ``TestCase``), the
+        call runs on the request thread and sees its uncommitted writes;
+        otherwise on a worker thread, like :meth:`to_thread`. See
+        :func:`drf_batch.loop.run_sync`.
+        """
+        return await loop.run_sync(func, *args, **kwargs)
 
     def taskgroup(self) -> asyncio.TaskGroup:
         """An ``asyncio.TaskGroup`` for structured concurrency inside ``collect``."""

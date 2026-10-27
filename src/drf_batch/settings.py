@@ -20,6 +20,12 @@ DEFAULTS: dict[str, Any] = {
     "BATCH_MAX_SIZE": 1000,
     "BULK_SIZE": 1000,
     "COLLECT_TIMEOUT": 10.0,
+    # "auto": the ASGI server's loop when there is one, else thread mode;
+    # "thread": always thread mode (see drf_batch.loop).
+    "EVENT_LOOP": "auto",
+    # Thread mode: dotted path to a callable returning a loop the
+    # application already runs in its own thread; None = built-in thread.
+    "THREAD_LOOP": None,
 }
 
 

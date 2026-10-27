@@ -12,7 +12,7 @@ from typing import Any
 from unittest import mock
 
 import pytest
-from django.db import OperationalError, connection, connections
+from django.db import OperationalError, connection
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 
@@ -403,25 +403,29 @@ def test_non_bulk_destroy_retry_uses_fresh_instances(tickers, customers):
 
 
 # ---------------------------------------------------------------------------
-# C5: worker threads do not keep connections
+# C5: worker threads manage their connections like a request
 # ---------------------------------------------------------------------------
 
 
-def test_to_thread_closes_the_worker_connections():
-    # Asserted on the call: Django's SQLite backend never really closes an
+def test_to_thread_applies_request_connection_handling_on_the_worker():
+    # Asserted on the calls: Django's SQLite backend never really closes an
     # in-memory test database, so the effect is not observable here.
     import threading
 
-    closed_in: list[str] = []
+    calls: list[tuple[str, str]] = []
 
-    def fake_close_all() -> None:
-        closed_in.append(threading.current_thread().name)
+    def fake_close_old_connections() -> None:
+        calls.append(("close_old", threading.current_thread().name))
 
-    with mock.patch.object(connections, "close_all", fake_close_all):
-        worker = asyncio.run(loop.to_thread(lambda: threading.current_thread().name))
+    def work() -> str:
+        calls.append(("call", threading.current_thread().name))
+        return threading.current_thread().name
 
-    assert closed_in == [worker]
+    with mock.patch.object(loop, "close_old_connections", fake_close_old_connections):
+        worker = asyncio.run(loop.to_thread(work))
+
     assert worker != threading.current_thread().name
+    assert calls == [("close_old", worker), ("call", worker), ("close_old", worker)]
 
 
 @pytest.mark.parametrize(
