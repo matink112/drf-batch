@@ -53,6 +53,11 @@ class BatchConfig:
         The mixin passes ``view.check_object_permissions``.
     :param lock_targets: re-fetch update/destroy targets with
         ``select_for_update()`` inside the write transaction.
+    :param concurrent_collection: run the cached fields' fetches as a
+        dependency graph on the event loop, each one as soon as its
+        ``depends_on`` are done (sync fetches on worker threads). ``False``
+        runs them one by one in plan order, sync fetches on the request
+        thread (inside the request's transaction).
     """
 
     operation: BatchOperation = BatchOperation.CREATE
@@ -64,6 +69,7 @@ class BatchConfig:
     queryset: QuerySet[Any] | None = None
     check_object: Callable[[Any], None] | None = None
     lock_targets: bool = True
+    concurrent_collection: bool = True
 
     def __post_init__(self) -> None:
         try:

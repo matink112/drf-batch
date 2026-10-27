@@ -779,13 +779,16 @@ def test_async_service_fetch_bridged_to_the_loop(tickers, customers):
     assert serializer.validated_data[0]["ticker"] == tickers[0]
 
 
-def test_sync_fast_path_starts_no_loop_thread(tickers, customers):
+def test_sequential_collection_runs_inline_and_starts_no_loop_thread(
+    tickers, customers
+):
     assert loop._loop_thread() is None
 
-    serializer, _ = make_list_serializer(_rows())
+    serializer, _ = make_list_serializer(_rows(), concurrent_collection=False)
     serializer.is_valid(raise_exception=True)
 
     assert loop._loop_thread() is None
+    assert serializer.validated_data[0]["ticker"] == tickers[0]
 
 
 @pytest.mark.django_db(transaction=True)

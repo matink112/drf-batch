@@ -34,8 +34,10 @@ notice before 1.0.
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import inspect
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar, cast
@@ -44,7 +46,7 @@ from django.core.exceptions import ImproperlyConfigured
 from django.core.exceptions import (
     ValidationError as DjangoValidationError,
 )
-from django.db import models
+from django.db import connections, models
 from django.utils.translation import gettext_lazy
 from rest_framework.exceptions import (
     APIException,
@@ -62,7 +64,12 @@ from drf_batch import loop
 from drf_batch._utils import default_manager, non_field_key
 from drf_batch.collectors import BatchCollector, BatchContext
 from drf_batch.config import BatchConfig, BatchOperation
-from drf_batch.exceptions import BatchConflict, BatchNotFound, BatchPermissionDenied
+from drf_batch.exceptions import (
+    BatchCollectionTimeout,
+    BatchConflict,
+    BatchNotFound,
+    BatchPermissionDenied,
+)
 from drf_batch.fields import (
     NO_KEY,
     CachedField,
@@ -328,6 +335,16 @@ class CollectionPass(PipelinePass):
     request's transaction. The target map is also exposed as
     ``collected[pk_name]``. Cached fields are then collected (not for
     destroy, which has no row payload).
+
+    The auto plan runs as a dependency graph (``concurrent=True``, the
+    default): one ``asyncio.TaskGroup`` on the event loop, every fetch
+    started as soon as its own ``depends_on`` are done, sync fetches on
+    worker threads — or, when the request's connection is in a transaction,
+    on the request thread, which serves them one at a time while it waits,
+    so they see the transaction. ``concurrent=False`` runs the plan one
+    fetch at a time:
+    sync fetches inline on the request thread, async ones bridged one by
+    one, under one shared timeout.
     """
 
     name: ClassVar[str] = "collection"
@@ -339,12 +356,15 @@ class CollectionPass(PipelinePass):
         pk_name: str,
         collector: BatchCollector | None,
         target_queryset: Callable[[], Any] | None,
+        *,
+        concurrent: bool = True,
     ) -> None:
         self._plan = plan
         self._operation = operation
         self._pk_name = pk_name
         self._collector = collector
         self._target_queryset = target_queryset
+        self._concurrent = concurrent
 
     def run(self, ctx: PipelineContext) -> None:
         seed: dict[str, Any] = {}
@@ -372,51 +392,148 @@ class CollectionPass(PipelinePass):
             timeout = self._collector.collect_timeout
             if timeout is None:
                 timeout = get_setting("COLLECT_TIMEOUT")
-            result = loop.run_in_loop(result, timeout=timeout)
+            result = loop.run_in_loop(
+                result, timeout=timeout, serve_caller=_needs_request_thread()
+            )
         return dict(cast("dict[str, Any]", result))
 
+    def _skipped(self, ctx: PipelineContext, field: CachedField) -> bool:
+        """An empty key set makes this fetch provably ``{}``: no call."""
+        return field.skip_fetch_on_empty_keys and not ctx.key_sets.get(field.map)
+
     def _run_plan(self, ctx: PipelineContext, seed: dict[str, Any]) -> dict[str, Any]:
-        plan = self._plan
-        if not any(field.is_async for field in plan):
-            # All fetches sync: run inline on the request thread — no loop
-            # thread is ever started (sync-only deployments stay loop-free).
+        pending = [
+            f for f in self._plan if f.map not in seed and not self._skipped(ctx, f)
+        ]
+        if not pending:
+            # Nothing to fetch: no loop, no thread.
             collected = dict(seed)
-            for field in plan:
-                if field.map in collected:
-                    continue
-                keys = ctx.key_sets.get(field.map, set())
-                if not keys and field.skip_fetch_on_empty_keys:
-                    collected[field.map] = {}
-                else:
-                    collected[field.map] = field.fetch(
-                        keys, collected, ctx.serializer_context
-                    )
+            for field in self._plan:
+                collected.setdefault(field.map, {})
             return collected
+        if not self._concurrent:
+            return self._run_sequential(ctx, seed)
+        result = loop.run_in_loop(
+            self._run_graph(ctx, seed),
+            timeout=get_setting("COLLECT_TIMEOUT"),
+            serve_caller=_needs_request_thread(),
+        )
+        return cast("dict[str, Any]", result)
 
-        async def _run_all() -> dict[str, Any]:
-            collected = dict(seed)
-            for field in plan:
-                if field.map in collected:
-                    continue
-                keys = ctx.key_sets.get(field.map, set())
-                if not keys and field.skip_fetch_on_empty_keys:
-                    result: Any = {}
-                elif field.is_async:
-                    result = await field.fetch(keys, collected, ctx.serializer_context)
-                else:
-                    # The loop thread has a running event loop, so a sync
-                    # fetch (notably ORM) goes to a worker thread whose
-                    # connection is closed afterwards.
-                    result = await loop.to_thread(
-                        field.fetch, keys, collected, ctx.serializer_context
-                    )
-                    if inspect.isawaitable(result):
-                        result = await result
-                collected[field.map] = result
-            return collected
+    async def _run_graph(
+        self, ctx: PipelineContext, seed: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Every fetch as a task that waits for its own ``depends_on`` only.
 
+        With 2 and 3 depending on 1, 4 on 3 and 6 on 5, fetches 1, 5 and 7
+        start together; 2 and 3 when 1 is done; 4 when 3 is done (not
+        waiting for 2); 6 when 5 is done.
+
+        Sync fetches go through :func:`drf_batch.loop.run_sync`: on worker
+        threads (concurrently), or, when the request's connection is in a
+        transaction, on the request thread (one at a time, seeing it).
+        """
+        collected = dict(seed)
+        by_name: dict[str | None, asyncio.Task[None]] = {}
+        by_map: dict[str, asyncio.Task[None]] = {}
+
+        async def run(field: CachedField, deps: list[asyncio.Task[None]]) -> None:
+            if deps:
+                await asyncio.gather(*deps)
+            # A snapshot: seed + everything finished so far, which includes
+            # every (transitive) depends_on. Never the live dict, which
+            # other tasks keep writing to.
+            snapshot = dict(collected)
+            keys = ctx.key_sets.get(field.map, set())
+            if field.is_async:
+                result = await field.fetch(keys, snapshot, ctx.serializer_context)
+            else:
+                result = await loop.run_sync(
+                    field.fetch, keys, snapshot, ctx.serializer_context
+                )
+            if inspect.isawaitable(result):
+                result = await result
+            collected[field.map] = result
+
+        try:
+            async with asyncio.TaskGroup() as group:
+                for field in self._plan:  # topological: dependencies first
+                    if field.map in seed:
+                        continue
+                    if field.map in by_map:
+                        # A map shared by two fields is fetched once.
+                        by_name[field.field_name] = by_map[field.map]
+                        continue
+                    if self._skipped(ctx, field):
+                        collected[field.map] = {}
+                        continue
+                    deps = [by_name[d] for d in field.depends_on if d in by_name]
+                    task = group.create_task(run(field, deps))
+                    by_name[field.field_name] = by_map[field.map] = task
+        except BaseExceptionGroup as group_error:
+            # Keep the contract: the fetch's own exception propagates.
+            raise _first_leaf(group_error) from None
+        # Plan order (topological, declaration tie-break), not completion order.
+        ordered = dict(seed)
+        for field in self._plan:
+            if field.map in collected:
+                ordered.setdefault(field.map, collected[field.map])
+        return ordered
+
+    def _run_sequential(
+        self, ctx: PipelineContext, seed: dict[str, Any]
+    ) -> dict[str, Any]:
         timeout = get_setting("COLLECT_TIMEOUT")
-        return cast("dict[str, Any]", loop.run_in_loop(_run_all(), timeout=timeout))
+        deadline = None if timeout is None else time.monotonic() + timeout
+        collected = dict(seed)
+        for field in self._plan:
+            if field.map in collected:
+                continue
+            if self._skipped(ctx, field):
+                collected[field.map] = {}
+                continue
+            keys = ctx.key_sets.get(field.map, set())
+            result = field.fetch(keys, collected, ctx.serializer_context)
+            if inspect.isawaitable(result):
+                remaining = None
+                if deadline is not None:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        loop._close_unawaited(result)
+                        raise BatchCollectionTimeout()
+                result = loop.run_in_loop(result, timeout=remaining)
+            collected[field.map] = result
+        return collected
+
+
+def _needs_request_thread() -> bool:
+    """Whether sync fetches must run on this (the request) thread.
+
+    Other threads' connections cannot see what this thread's connection
+    sees when it is inside ``atomic()`` (``ATOMIC_REQUESTS``, an outer
+    ``atomic()``, test cases that wrap each test in a transaction: they
+    would miss its uncommitted writes), or when a database is a private
+    in-memory SQLite database (``NAME = ":memory:"``: every connection is a
+    separate, empty database).
+    """
+    if any(conn.in_atomic_block for conn in connections.all(initialized_only=True)):
+        return True
+    return any(_is_private_memory_db(conn) for conn in connections.all())
+
+
+def _is_private_memory_db(conn: Any) -> bool:
+    if conn.vendor != "sqlite":
+        return False
+    name = str(conn.settings_dict.get("NAME") or "")
+    in_memory = name == ":memory:" or "mode=memory" in name
+    return in_memory and "cache=shared" not in name
+
+
+def _first_leaf(group: BaseExceptionGroup[Any]) -> BaseException:
+    exc: BaseException = group
+    while isinstance(exc, BaseExceptionGroup):
+        exc = exc.exceptions[0]
+    return exc
 
 
 # ---------------------------------------------------------------------------
@@ -632,7 +749,14 @@ def build_pipeline(
         return BatchPipeline(
             [
                 CreateExtractionPass(cached_fields),
-                CollectionPass(plan, operation, pk_name, config.collector, None),
+                CollectionPass(
+                    plan,
+                    operation,
+                    pk_name,
+                    config.collector,
+                    None,
+                    concurrent=config.concurrent_collection,
+                ),
                 RowValidationPass(child, operation, read_only_fields),
                 ConflictPass(conflict_rules, model, pk_name, operation, db_check=True),
             ],
@@ -653,7 +777,14 @@ def build_pipeline(
     if operation == BatchOperation.UPDATE:
         passes = [
             UpdateExtractionPass(cached_fields, pk_field, pk_name),
-            CollectionPass(plan, operation, pk_name, config.collector, target_queryset),
+            CollectionPass(
+                plan,
+                operation,
+                pk_name,
+                config.collector,
+                target_queryset,
+                concurrent=config.concurrent_collection,
+            ),
             NotFoundPass(pk_name),
         ]
     else:

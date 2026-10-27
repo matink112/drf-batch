@@ -71,6 +71,9 @@ class BatchMixin:
             or class, or ``None`` (run the write once).
         batch_lock_targets: lock update/destroy targets with
             ``select_for_update()`` during the write (default ``True``).
+        batch_concurrent_collection: fetch the cached fields concurrently
+            as a dependency graph (default ``True``); ``False`` fetches
+            them one by one, sync fetches on the request thread.
         batch_response: ``"count"`` (default) returns ``{"count": N}``;
             ``"data"`` returns the serialized rows (create/update) or the
             deleted pks (destroy).
@@ -85,6 +88,7 @@ class BatchMixin:
     batch_conflict_status: int = status.HTTP_409_CONFLICT
     batch_retry_policy: type[RetryPolicy] | RetryPolicy | None = None
     batch_lock_targets: bool = True
+    batch_concurrent_collection: bool = True
     batch_response: str = "count"
 
     _SUCCESS_STATUS: ClassVar[dict[BatchOperation, int]] = {
@@ -217,6 +221,7 @@ class BatchMixin:
             ),
             check_object=self.check_batch_object_permissions,
             lock_targets=self.batch_lock_targets,
+            concurrent_collection=self.batch_concurrent_collection,
         )
 
     def check_batch_object_permissions(self, obj: Any) -> None:

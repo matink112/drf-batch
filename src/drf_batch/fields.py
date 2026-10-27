@@ -70,8 +70,10 @@ class CachedField(serializers.Field):
     :param error: optional template for the miss message; ``{value}`` is
         replaced with the offending (coerced) value. Defaults to
         ``"Object '{value}' not found."``.
-    :param depends_on: names of other cached fields whose fetches must run
-        first; every fetch receives the maps collected so far.
+    :param depends_on: names of other cached fields whose fetches must
+        finish first. Fetches without a dependency between them run
+        concurrently; every fetch receives a snapshot of the maps collected
+        so far, which always includes its ``depends_on`` maps.
     """
 
     default_error_messages = {  # noqa: RUF012
@@ -135,9 +137,11 @@ class CachedField(serializers.Field):
     ) -> Any:
         """Return the ``{lookup_key: value}`` map for ``keys``.
 
-        ``collected`` holds the maps gathered by the earlier fetches in
-        topological order; ``context`` is the serializer context. May be a
-        sync method or an ``async def`` (bridged to the shared loop).
+        ``collected`` is a snapshot of the maps finished so far (always
+        including this field's ``depends_on``); ``context`` is the
+        serializer context. May be a sync method (run on a worker thread,
+        or on the request thread inside a transaction) or an ``async def``
+        (run on the event loop).
         """
         raise NotImplementedError
 
