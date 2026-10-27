@@ -48,9 +48,10 @@ request latency ≈ longest fetch chain  +  in-memory validation  +  bulk write
 - **DRF's authorization rules on every row.** Update and delete targets come
   from `get_queryset()` and pass `check_object_permissions()`; lookups can be
   scoped with `queryset=` / `get_queryset()`.
-- **One route, three DRF actions.** `BatchMixin` adds `/<resource>/batch/`
-  with `POST` (create), `PATCH` (partial update by pk) and `DELETE` (delete by
-  pk), so permissions and throttles can treat each one separately.
+- **One route, four DRF actions.** `BatchMixin` adds `/<resource>/batch/`
+  with `POST` (create), `PATCH` (partial update by pk), `PUT` (full update by
+  pk, opt-in) and `DELETE` (delete by pk), so permissions and throttles can
+  treat each one separately.
 - **Index-aligned errors** that existing `many=True` clients already
   understand.
 - **WSGI and ASGI, typed, with OpenAPI** through drf-spectacular.
@@ -200,12 +201,13 @@ urlpatterns = router.urls
 ```
 
 `BatchMixin` adds one route, `/orders/batch/` (URL name `order-batch`), with
-three DRF actions:
+DRF actions:
 
 | Method | `self.action` | Operation |
 |---|---|---|
 | `POST` | `batch_create` | create rows |
 | `PATCH` | `batch_update` | partial update by primary key |
+| `PUT` | `batch_replace` | full update by primary key (opt-in, see [Batch update](#batch-update)) |
 | `DELETE` | `batch_destroy` | delete by primary key |
 
 The distinct action names mean `get_permissions()`, `get_throttles()` and
@@ -276,8 +278,10 @@ class OwnedOrderViewSet(BatchMixin, GenericViewSet):
 ## Hooks and responses
 
 The write runs through `perform_batch_create(serializer)`,
-`perform_batch_update(serializer)` and `perform_batch_destroy(serializer)`,
-mirroring DRF's `perform_create` & co. The default calls
+`perform_batch_update(serializer)`, `perform_batch_replace(serializer)` and
+`perform_batch_destroy(serializer)`, mirroring DRF's `perform_create` & co.
+`perform_batch_replace` (PUT) calls `perform_batch_update` by default, so one
+update hook covers both. The default calls
 `serializer.save()`. Keyword arguments to `save()` are merged into every row
 (`serializer.save(owner=request.user)`). To run work after commit (events,
 cache invalidation), use `transaction.on_commit` inside the hook.
@@ -1006,6 +1010,30 @@ curl -X PATCH http://localhost:8000/orders/batch/ \
 - Rows are validated with their target as `serializer.instance` (DRF's
   update pattern), so your `validate()` can compare against current values.
 
+### Full rows with `PUT`
+
+`PUT /orders/batch/` is the same update with DRF's `PUT` semantics: every row
+is validated as a full object, so a missing required field is a 400 on that
+row (`{"volume": ["This field is required."]}`). As with DRF's own `PUT`, an
+optional field a row leaves out keeps its current value. Scoping, object
+permissions, conflicts and the all-or-none write are the same as `PATCH`.
+
+`PUT` is **off by default**: an existing `get_permissions()` that restricts
+`batch_update` would not cover a new `batch_replace` action. Enable it
+explicitly:
+
+```python
+class OrderViewSet(BatchMixin, GenericViewSet):
+    batch_serializer_class = OrderSerializer
+    batch_actions = ("create", "update", "replace", "destroy")
+```
+
+Outside a viewset, pass `partial=False`:
+
+```python
+serializer = OrderSerializer(data=rows, many=True, operation="update", partial=False)
+```
+
 ## Batch delete
 
 `DELETE /orders/batch/` takes a list of **scalar pks** (a dict or nested row
@@ -1129,7 +1157,7 @@ Every `BatchMixin` viewset is then documented accurately:
 ## How it works
 
 ```
-/orders/batch/   [ rows × N ]    POST → batch_create, PATCH → batch_update, DELETE → batch_destroy
+/orders/batch/   [ rows × N ]    POST → batch_create, PATCH → batch_update, PUT → batch_replace, DELETE → batch_destroy
   1. payload must be a JSON array                         → 400
   2. len(rows) > batch_max_size                           → 413
   3. validation (BatchListSerializer, one pass after another):
@@ -1180,7 +1208,7 @@ class OrderViewSet(BatchMixin, GenericViewSet):
     batch_max_size = None  # BATCH_MAX_SIZE
     batch_use_bulk = True  # False: per-row create / update / delete()
     batch_bulk_size = None  # BULK_SIZE
-    batch_actions = ("create", "update", "destroy")  # others → 405
+    batch_actions = ("create", "update", "destroy")  # + "replace" for PUT; others → 405
     batch_conflict_status = 409
     batch_retry_policy = None  # FixedRetryPolicy(...) to retry the write
     batch_lock_targets = True  # select_for_update() targets during the write

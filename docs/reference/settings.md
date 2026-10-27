@@ -25,7 +25,7 @@ class OrderViewSet(BatchMixin, GenericViewSet):
     batch_max_size = None  # BATCH_MAX_SIZE
     batch_use_bulk = True  # False: per-row create / update / delete()
     batch_bulk_size = None  # BULK_SIZE
-    batch_actions = ("create", "update", "destroy")  # others → 405
+    batch_actions = ("create", "update", "destroy")  # + "replace" for PUT; others → 405
     batch_conflict_status = 409
     batch_retry_policy = None  # FixedRetryPolicy(...) to retry the write
     batch_lock_targets = True  # select_for_update() targets during the write

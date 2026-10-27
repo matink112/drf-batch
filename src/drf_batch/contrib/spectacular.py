@@ -5,8 +5,9 @@ Importing this module registers two extensions (``"drf_batch"`` in
 installed):
 
 - a view extension for every :class:`~drf_batch.BatchMixin` viewset, which
-  documents the three batch operations: array request bodies (create rows;
-  partial update rows with a required pk; destroy pks), the success body
+  documents the batch operations: array request bodies (create rows;
+  partial update rows with a required pk; full replace rows with a required
+  pk; destroy pks), the success body
   (``{"count": N}`` or the data, per ``batch_response``) and the
   index-aligned 400/403/404/409 bodies plus 413/504;
 - a field extension that types cached fields by their lookup field
@@ -78,16 +79,19 @@ def _pk_serializer_field(model: type[models.Model]) -> serializers.Field:
 
 @functools.cache
 def _update_row_class(
-    child_class: type[serializers.ModelSerializer], model: type[models.Model]
+    child_class: type[serializers.ModelSerializer],
+    model: type[models.Model],
+    kind: str = "Update",
 ) -> type[serializers.ModelSerializer]:
-    """The child plus a writable pk field (one class per child: one component)."""
+    """The child plus a writable pk field (one class per child and kind: one
+    component each, so the partial and the full row never share a name)."""
     pk_name = model._meta.pk.name
     meta_attrs: dict[str, Any] = {}
     fields = getattr(child_class.Meta, "fields", None)
     if isinstance(fields, (list, tuple)) and pk_name not in fields:
         meta_attrs["fields"] = (*fields, pk_name)
     return type(
-        f"{_base_name(child_class)}BatchUpdateRowSerializer",
+        f"{_base_name(child_class)}Batch{kind}RowSerializer",
         (child_class,),
         {
             pk_name: _pk_serializer_field(model),
@@ -107,6 +111,13 @@ def _update_row_serializer(
         if not field.read_only:
             field.required = name == pk_name
     return row
+
+
+def _replace_row_serializer(
+    child_class: type[serializers.ModelSerializer], model: type[models.Model]
+) -> serializers.Serializer:
+    """A replace (PUT) row: required pk, the child's own required fields."""
+    return _update_row_class(child_class, model, "Replace")()
 
 
 def _responses(
@@ -176,6 +187,18 @@ class BatchMixinViewExtension(OpenApiViewExtension):
                     not_found=True,
                 ),
             )
+        if "replace" in enabled:
+            schemas["batch_replace"] = extend_schema(
+                summary=f"Batch-replace {base} rows by primary key (full rows)",
+                request=serializers.ListSerializer(
+                    child=_replace_row_serializer(child_class, model)
+                ),
+                responses=_responses(
+                    child_class(many=True) if data_mode else count,
+                    200,
+                    not_found=True,
+                ),
+            )
         if "destroy" in enabled:
             schemas["batch_destroy"] = extend_schema(
                 summary=f"Batch-delete {base} rows by primary key",
@@ -192,11 +215,12 @@ class BatchMixinViewExtension(OpenApiViewExtension):
         for operation, method_name in (
             ("create", "batch_create"),
             ("update", "batch_update"),
+            ("replace", "batch_replace"),
             ("destroy", "batch_destroy"),
         ):
             if operation not in enabled:
                 schemas[method_name] = extend_schema(exclude=True)
-        # The PATCH/DELETE handlers are ``@batch_create.mapping`` methods,
+        # The PATCH/PUT/DELETE handlers are ``@batch_create.mapping`` methods,
         # which extend_schema_view does not see: decorate isolated copies on
         # a subclass directly (never the mixin's own functions).
         replacement = type(view.__name__, (view,), {"__module__": view.__module__})

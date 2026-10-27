@@ -1,15 +1,16 @@
 """``BatchMixin``: the batch pipeline for viewsets.
 
-Adds one route, ``/<resource>/batch/``, with three DRF actions:
+Adds one route, ``/<resource>/batch/``, with four DRF actions:
 
 - ``POST``   -> ``batch_create``  (``self.action == "batch_create"``)
 - ``PATCH``  -> ``batch_update``  (by primary key, partial)
+- ``PUT``    -> ``batch_replace`` (by primary key, full rows; opt-in)
 - ``DELETE`` -> ``batch_destroy`` (by primary key)
 
 Distinct action names let ``get_permissions()``, ``get_throttles()`` and
-``ScopedRateThrottle`` treat the three operations differently, as for any
-other viewset action. Operations not in ``batch_actions`` (and GET/PUT)
-return ``405``.
+``ScopedRateThrottle`` treat the operations differently, as for any other
+viewset action. Operations not in ``batch_actions`` (and GET) return ``405``;
+``PUT`` is off unless ``batch_actions`` lists ``"replace"``.
 
 The request flow:
 
@@ -46,6 +47,7 @@ from drf_batch.settings import get_setting
 BATCH_ACTIONS: dict[str, BatchOperation] = {
     "batch_create": BatchOperation.CREATE,
     "batch_update": BatchOperation.UPDATE,
+    "batch_replace": BatchOperation.UPDATE,
     "batch_destroy": BatchOperation.DESTROY,
 }
 
@@ -65,7 +67,8 @@ class BatchMixin:
         batch_bulk_size: chunk size for the bulk writes; ``None`` (default)
             uses the ``BULK_SIZE`` setting.
         batch_actions: operations the endpoint enables (``"create"``,
-            ``"update"``, ``"destroy"``); the others are a 405.
+            ``"update"``, ``"replace"``, ``"destroy"``); the others are a
+            405. ``"replace"`` (``PUT``) is not enabled by default.
         batch_conflict_status: HTTP status for conflicts (default 409).
         batch_retry_policy: a :class:`~drf_batch.retry.RetryPolicy` instance
             or class, or ``None`` (run the write once).
@@ -109,6 +112,11 @@ class BatchMixin:
         """``PATCH /<resource>/batch/``: partial update by primary key (``200``)."""
         return self.run_batch(BatchOperation.UPDATE)
 
+    @batch_create.mapping.put
+    def batch_replace(self, request: Request, *args: Any, **kwargs: Any) -> Response:
+        """``PUT /<resource>/batch/``: full update by primary key (``200``)."""
+        return self.run_batch(BatchOperation.UPDATE)
+
     @batch_create.mapping.delete
     def batch_destroy(self, request: Request, *args: Any, **kwargs: Any) -> Response:
         """``DELETE /<resource>/batch/``: delete by primary key (``200``)."""
@@ -117,7 +125,9 @@ class BatchMixin:
     def run_batch(self, operation: BatchOperation) -> Response:
         """Validate and write one batch: the body of the three actions."""
         request: Request = self.request  # type: ignore[attr-defined]
-        if operation not in self.get_batch_actions():
+        replace = operation == BatchOperation.UPDATE and not self.get_batch_partial()
+        enabled = "replace" if replace else operation.value
+        if enabled not in self.get_batch_actions():
             raise MethodNotAllowed(cast("str", request.method))
         rows = self.get_batch_rows(request)
         self.enforce_batch_size(rows)
@@ -125,7 +135,9 @@ class BatchMixin:
         serializer.is_valid(raise_exception=True)
         perform = {
             BatchOperation.CREATE: self.perform_batch_create,
-            BatchOperation.UPDATE: self.perform_batch_update,
+            BatchOperation.UPDATE: (
+                self.perform_batch_replace if replace else self.perform_batch_update
+            ),
             BatchOperation.DESTROY: self.perform_batch_destroy,
         }[operation]
         perform(serializer)
@@ -143,6 +155,10 @@ class BatchMixin:
     def perform_batch_update(self, serializer: BatchListSerializer) -> None:
         """Write a validated update batch; override to pass ``save()`` kwargs."""
         serializer.save()
+
+    def perform_batch_replace(self, serializer: BatchListSerializer) -> None:
+        """Write a validated ``PUT`` batch; defaults to :meth:`perform_batch_update`."""
+        self.perform_batch_update(serializer)
 
     def perform_batch_destroy(self, serializer: BatchListSerializer) -> None:
         """Delete a validated batch of targets."""
@@ -222,6 +238,7 @@ class BatchMixin:
             check_object=self.check_batch_object_permissions,
             lock_targets=self.batch_lock_targets,
             concurrent_collection=self.batch_concurrent_collection,
+            partial=self.get_batch_partial(),
         )
 
     def check_batch_object_permissions(self, obj: Any) -> None:
@@ -259,6 +276,10 @@ class BatchMixin:
         if self.batch_bulk_size is not None:
             return self.batch_bulk_size
         return int(get_setting("BULK_SIZE"))
+
+    def get_batch_partial(self) -> bool:
+        """Whether update rows are partial (``False`` for ``batch_replace``)."""
+        return getattr(self, "action", None) != "batch_replace"
 
     def get_batch_actions(self) -> tuple[str, ...]:
         """The enabled operations (``batch_actions``)."""

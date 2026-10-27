@@ -45,9 +45,10 @@ request latency ≈ longest fetch chain  +  in-memory validation  +  bulk write
 - **DRF's authorization rules on every row.** Update and delete targets come
   from `get_queryset()` and pass `check_object_permissions()`; lookups can be
   scoped with `queryset=` / `get_queryset()`.
-- **One route, three DRF actions.** `BatchMixin` adds `/<resource>/batch/`
-  with `POST` (create), `PATCH` (partial update by pk) and `DELETE` (delete by
-  pk), so permissions and throttles can treat each one separately.
+- **One route, four DRF actions.** `BatchMixin` adds `/<resource>/batch/`
+  with `POST` (create), `PATCH` (partial update by pk), `PUT` (full update by
+  pk, opt-in) and `DELETE` (delete by pk), so permissions and throttles can
+  treat each one separately.
 - **Index-aligned errors** that existing `many=True` clients already
   understand.
 - **WSGI and ASGI, typed, with OpenAPI** through drf-spectacular.

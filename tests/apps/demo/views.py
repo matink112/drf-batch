@@ -161,6 +161,8 @@ class OwnedOrderViewSet(OrderViewSet):
     The perform hook stamps the owner on create, DRF-style.
     """
 
+    batch_actions = ("create", "update", "replace", "destroy")
+
     def get_queryset(self) -> Any:
         return Order.objects.filter(owner_id=self.request.user.pk)
 
@@ -179,6 +181,7 @@ class RejectVolumeTenObjects(BasePermission):
 
 class GuardedOrderViewSet(OrderViewSet):
     permission_classes = [IsAuthenticated, RejectVolumeTenObjects]
+    batch_actions = ("create", "update", "replace", "destroy")
 
 
 class RecordingPermission(BasePermission):
@@ -193,6 +196,7 @@ class RecordingPermission(BasePermission):
 
 class ActionRecordingOrderViewSet(OrderViewSet):
     permission_classes = [IsAuthenticated, RecordingPermission]
+    batch_actions = ("create", "update", "replace", "destroy")
 
 
 class DataResponseOrderViewSet(OrderViewSet):
@@ -219,3 +223,12 @@ class ScopedTickerOrderViewSet(OrderViewSet):
 class AuditedUpdateOrderViewSet(OrderViewSet):
     batch_serializer_class: type[BatchSerializer] | None = AuditedUpdateOrderSerializer
     batch_use_bulk = False
+
+
+class ReplaceOrderViewSet(OrderViewSet):
+    """PUT enabled; the update hook stamps the owner (PUT reuses it)."""
+
+    batch_actions = ("create", "update", "replace", "destroy")
+
+    def perform_batch_update(self, serializer: Any) -> None:
+        serializer.save(owner=self.request.user)

@@ -19,6 +19,7 @@ from .views import (
     OwnedOrderViewSet,
     RawOrderViewSet,
     ReadWriteOrderViewSet,
+    ReplaceOrderViewSet,
     ScopedTickerOrderViewSet,
     ServiceOrderViewSet,
     SlowAsyncOrderViewSet,
@@ -58,5 +59,7 @@ router.register(
     "scoped-ticker-orders", ScopedTickerOrderViewSet, basename="scoped-ticker-order"
 )
 router.register("audited-orders", AuditedUpdateOrderViewSet, basename="audited-order")
+
+router.register("replace-orders", ReplaceOrderViewSet, basename="replace-order")
 
 urlpatterns = router.urls

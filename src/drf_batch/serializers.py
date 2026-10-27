@@ -138,11 +138,12 @@ class BatchListSerializer(serializers.ListSerializer):
                 f"BatchListSerializer: the '{config.operation}' operation "
                 "requires a Meta.model on the child serializer."
             )
-        # Update is partial: a row's missing writable fields are skipped
-        # (DRF reads ``self.root.partial`` for each child field), so only the
-        # supplied fields change.
+        # Update is partial by default (PATCH): a row's missing writable
+        # fields are skipped (DRF reads ``self.root.partial`` for each child
+        # field), so only the supplied fields change. ``partial=False`` (PUT)
+        # enforces required fields, as DRF's own update does.
         if config.operation == BatchOperation.UPDATE:
-            self.partial = True
+            self.partial = config.partial
         # Fail-fast configuration checks, delegated to the pipeline modules.
         check_bulk_fields(self._child, self._model, config.use_bulk)
         plan = build_collection_plan(self._child)

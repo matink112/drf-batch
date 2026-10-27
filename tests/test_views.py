@@ -320,8 +320,8 @@ class TestSerializerClassResolution:
 
 
 class TestHttpSemantics:
-    # POST/PATCH/DELETE are the batch methods; GET/PUT are not routed to the
-    # action and stay 405.
+    # POST/PATCH/DELETE are the batch methods; GET is not routed to the
+    # action, and PUT is off unless batch_actions lists "replace": both 405.
     @pytest.mark.parametrize("method", ["get", "put"])
     def test_methods_other_than_batch_are_405(self, client, method):
         response = getattr(client, method)(BATCH_URL)

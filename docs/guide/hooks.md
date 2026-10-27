@@ -1,8 +1,10 @@
 # Hooks and responses
 
 The write runs through `perform_batch_create(serializer)`,
-`perform_batch_update(serializer)` and `perform_batch_destroy(serializer)`,
-mirroring DRF's `perform_create` & co. The default calls
+`perform_batch_update(serializer)`, `perform_batch_replace(serializer)` and
+`perform_batch_destroy(serializer)`, mirroring DRF's `perform_create` & co.
+`perform_batch_replace` (PUT) calls `perform_batch_update` by default, so one
+update hook covers both. The default calls
 `serializer.save()`. Keyword arguments to `save()` are merged into every row
 (`serializer.save(owner=request.user)`). To run work after commit (events,
 cache invalidation), use `transaction.on_commit` inside the hook.

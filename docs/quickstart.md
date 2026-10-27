@@ -109,12 +109,13 @@ urlpatterns = router.urls
 ```
 
 `BatchMixin` adds one route, `/orders/batch/` (URL name `order-batch`), with
-three DRF actions:
+DRF actions:
 
 | Method | `self.action` | Operation |
 |---|---|---|
 | `POST` | `batch_create` | create rows |
 | `PATCH` | `batch_update` | partial update by primary key |
+| `PUT` | `batch_replace` | full update by primary key (opt-in, see [Batch update](guide/write-path.md#batch-update)) |
 | `DELETE` | `batch_destroy` | delete by primary key |
 
 The distinct action names mean `get_permissions()`, `get_throttles()` and

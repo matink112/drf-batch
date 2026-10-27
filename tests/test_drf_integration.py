@@ -184,11 +184,13 @@ class TestActions:
 
         client.post(self.URL, [row("1102", "112001", 1, "N")])
         client.patch(self.URL, [{"id": order.pk, "volume": 3}])
+        client.put(self.URL, [{"id": order.pk, **row("1101", "112001", 4, "R")}])
         client.delete(self.URL, [order.pk])
 
         assert RecordingPermission.seen == [
             "batch_create",
             "batch_update",
+            "batch_replace",
             "batch_destroy",
         ]
 

@@ -1,7 +1,7 @@
 # How it works
 
 ```
-/orders/batch/   [ rows × N ]    POST → batch_create, PATCH → batch_update, DELETE → batch_destroy
+/orders/batch/   [ rows × N ]    POST → batch_create, PATCH → batch_update, PUT → batch_replace, DELETE → batch_destroy
   1. payload must be a JSON array                         → 400
   2. len(rows) > batch_max_size                           → 413
   3. validation (BatchListSerializer, one pass after another):

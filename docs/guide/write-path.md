@@ -64,6 +64,30 @@ curl -X PATCH http://localhost:8000/orders/batch/ \
 - Rows are validated with their target as `serializer.instance` (DRF's
   update pattern), so your `validate()` can compare against current values.
 
+### Full rows with `PUT`
+
+`PUT /orders/batch/` is the same update with DRF's `PUT` semantics: every row
+is validated as a full object, so a missing required field is a 400 on that
+row (`{"volume": ["This field is required."]}`). As with DRF's own `PUT`, an
+optional field a row leaves out keeps its current value. Scoping, object
+permissions, conflicts and the all-or-none write are the same as `PATCH`.
+
+`PUT` is **off by default**: an existing `get_permissions()` that restricts
+`batch_update` would not cover a new `batch_replace` action. Enable it
+explicitly:
+
+```python
+class OrderViewSet(BatchMixin, GenericViewSet):
+    batch_serializer_class = OrderSerializer
+    batch_actions = ("create", "update", "replace", "destroy")
+```
+
+Outside a viewset, pass `partial=False`:
+
+```python
+serializer = OrderSerializer(data=rows, many=True, operation="update", partial=False)
+```
+
 ## Batch delete
 
 `DELETE /orders/batch/` takes a list of **scalar pks** (a dict or nested row

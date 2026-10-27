@@ -35,6 +35,29 @@ def test_update_rows_require_only_the_pk(schema):
     assert {"403", "404"} <= set(patch["responses"])
 
 
+def test_replace_rows_keep_the_child_required_fields(schema):
+    put = schema["paths"]["/replace-orders/batch/"]["put"]
+    row = schema["components"]["schemas"]["OrderBatchReplaceRow"]
+
+    assert _request_schema(put)["items"] == {
+        "$ref": "#/components/schemas/OrderBatchReplaceRow"
+    }
+    assert set(row["required"]) == {
+        "id",
+        "ticker",
+        "customer",
+        "volume",
+        "reference_id",
+    }
+    assert {"403", "404"} <= set(put["responses"])
+    # The partial row is a separate component.
+    assert schema["components"]["schemas"]["OrderBatchUpdateRow"]["required"] == ["id"]
+
+
+def test_replace_is_not_documented_unless_enabled(schema):
+    assert "put" not in schema["paths"]["/orders/batch/"]
+
+
 def test_destroy_documents_its_pk_array(schema):
     delete = schema["paths"]["/orders/batch/"]["delete"]
 

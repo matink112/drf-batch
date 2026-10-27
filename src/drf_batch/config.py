@@ -58,6 +58,10 @@ class BatchConfig:
         ``depends_on`` are done (sync fetches on worker threads). ``False``
         runs them one by one in plan order, sync fetches on the request
         thread (inside the request's transaction).
+    :param partial: update rows are partial (``PATCH``, the default): a row's
+        missing fields are left unchanged. ``False`` validates every update
+        row as a full object (``PUT``): required fields must be present.
+        Ignored by create and destroy.
     """
 
     operation: BatchOperation = BatchOperation.CREATE
@@ -70,6 +74,7 @@ class BatchConfig:
     check_object: Callable[[Any], None] | None = None
     lock_targets: bool = True
     concurrent_collection: bool = True
+    partial: bool = True
 
     def __post_init__(self) -> None:
         try:
