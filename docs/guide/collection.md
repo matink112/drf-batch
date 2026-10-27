@@ -292,6 +292,54 @@ fetches run **on the request thread**, one at a time, while it waits for the
 graph. They see the transaction; `async def` fetches
 stay concurrent. Details: [Database connections](async.md#database-connections).
 
+Collection only reads, but those reads must see what the request's
+transaction sees. A worker thread's connection is a **separate
+transaction**, so it would:
+
+- miss rows written earlier in the same transaction (by the view, a hook,
+  middleware, or a `TestCase` fixture): a valid key becomes a "not found"
+  row error;
+- block on rows the request locked with `select_for_update()`, while the
+  request waits for it: a deadlock;
+- read a different snapshot under `REPEATABLE READ` / `SERIALIZABLE`.
+
+One connection cannot run queries in parallel, so seeing the transaction
+means running sync fetches one after another.
+
+**What it costs.** `scripts/bench_collection.py` (100 rows, N sync fetches,
+each one query plus a simulated round-trip):
+
+| Sync fetches | Round-trip | Outside a transaction | Inside |
+|---|---|---|---|
+| 8 | 1 ms (local, indexed DB) | 13.6 ms | 13.8 ms |
+| 4 | 5 ms | 10.7 ms | 31.2 ms |
+| 8 | 20 ms | 33.6 ms | 180.5 ms |
+
+Fast database lookups cost the same either way; slow **sync** I/O adds up.
+If that matters:
+
+- **Slow services: write the fetch as `async def`** with an async client
+  ([Async clients](async.md#async-clients)). Async fetches stay concurrent inside a
+  transaction.
+- **Or take the batch view out of `ATOMIC_REQUESTS`**, when nothing in the
+  request writes or locks before collection. Decorating an action method
+  has no effect; mark `dispatch`, on a viewset that serves only the batch
+  route (it applies to every action of the viewset):
+
+  ```python
+  from django.db import transaction
+
+
+  class OrderBatchViewSet(BatchMixin, GenericViewSet):
+      batch_serializer_class = OrderSerializer
+
+      @transaction.non_atomic_requests
+      def dispatch(self, *args, **kwargs):
+          return super().dispatch(*args, **kwargs)
+  ```
+
+  The batch write stays all-or-none: it runs in its own `atomic()`.
+
 ### Turning concurrency off
 
 `batch_concurrent_collection = False` runs the fetches one by one in plan
