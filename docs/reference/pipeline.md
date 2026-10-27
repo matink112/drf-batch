@@ -8,8 +8,10 @@
      extraction   shape + key/pk coercion per row         → 400 (no collection runs)
      collection   update/destroy: targets = get_queryset().in_bulk(pks)
                   (request thread); then the replacement collector, or the
-                  cached fields in topological order (depends_on); all sync →
-                  inline; any async → one coroutine, bridged once
+                  cached fields as one dependency graph (TaskGroup: each fetch
+                  starts when its depends_on are done) on the EVENT_LOOP loop;
+                  sync fetches on worker threads (request thread inside a
+                  transaction); nothing to fetch → no loop
                                                           → 504 timeout, 500 error
      not found    target pk missing or out of scope       → 404
      permission   check_object_permissions(target)        → 403

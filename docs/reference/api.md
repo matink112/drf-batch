@@ -64,5 +64,5 @@ without notice before 1.0.
 
 ::: drf_batch.loop
     options:
-      members: [run_in_loop, wait, to_thread, session, shutdown]
+      members: [use_loop, current_loop, run_sync, to_thread, run_in_loop, wait, session, shutdown]
       show_root_heading: false

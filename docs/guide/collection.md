@@ -27,7 +27,7 @@ ticker = CachedRelatedField(lookup="isin", error="Ticker '{value}' not found.")
 | `model` | the same-named FK's model | explicit model for non-FK lookups (or `queryset.model`) |
 | `map` | the field name | key in `collected` (two fields may share one map) |
 | `error` | `"Object '{value}' not found."` | miss message; `{value}` is the coerced key |
-| `depends_on` | `()` | cached fields whose maps must be collected first |
+| `depends_on` | `()` | cached fields whose fetches must finish first ([concurrency](#concurrency-and-depends_on)) |
 | `read_only` | `False` | excluded from `validated_data`; a supplied value is still checked |
 
 The lookup model is derived from the ForeignKey (or OneToOneField) on
@@ -83,8 +83,9 @@ band = CachedServiceField(fetch=fetch_bands, read_only=True)
 ```
 
 - `fetch(keys, collected, context)` receives the coerced key set for this
-  field, **all maps collected so far**, and the serializer context, and
-  returns a `{key: value}` dict.
+  field, a snapshot of the maps collected so far (always including every
+  [`depends_on`](#concurrency-and-depends_on) map), and the serializer
+  context, and returns a `{key: value}` dict.
 - Unlike a database lookup, the fetch runs even when no row supplied a key,
   because its map may be derived from the other maps. Return `{}` when nothing
   applies.
@@ -132,10 +133,10 @@ class ExchangeScopedTickerField(CachedRelatedField):
 
 
 class ServiceOrderSerializer(BatchSerializer):
-    # Fetch order (topological, via depends_on):
-    #   1. ticker/customer -> DB, auto (declaration order)
-    #   2. band            -> service, consumes collected["ticker"]
-    #   3. exchange_ticker -> DB again, scoped to the service's band "A"
+    # Fetch order (via depends_on):
+    #   1. ticker, customer -> DB, concurrently (no dependencies)
+    #   2. band             -> service, as soon as ticker is done
+    #   3. exchange_ticker  -> DB again, scoped to the service's band "A"
     ticker = CachedRelatedField(lookup="isin", error="Ticker '{value}' not found.")
     customer = CachedRelatedField(lookup="isin", error="Customer '{value}' not found.")
     band = CachedServiceField(fetch=fetch_bands, depends_on=("ticker",), read_only=True)
@@ -186,17 +187,129 @@ curl -X POST http://localhost:8000/service-orders/batch/ \
 ```
 
 - `fetch(keys, collected, context)` receives the coerced key set for this
-  field, **all maps collected so far**, and the serializer context; return a
-  `{key: value}` dict. A service fetch can therefore build its map from the
-  database results (`collected["ticker"]`), and a (subclassed) database fetch
-  can scope its query to the service results.
-- Fetches run in topological order; a cycle (or an unknown `depends_on` name)
-  is an `ImproperlyConfigured` at serializer construction.
+  field, the maps of its `depends_on` (and anything else already done), and
+  the serializer context; return a `{key: value}` dict. A service fetch can
+  therefore build its map from the database results (`collected["ticker"]`),
+  and a (subclassed) database fetch can scope its query to the service
+  results.
+- A cycle (or an unknown `depends_on` name) is an `ImproperlyConfigured` at
+  serializer construction.
 - Read-only cached fields are excluded from `validated_data` (so bulk create
   is unaffected); a row may optionally supply their value, which is checked
   against the map like any other hit/miss (a `"band": "C"` that the service
   map does not list is a 400 row error, as is an `exchange_ticker` the scoped
   fetch did not return).
+
+## Concurrency and `depends_on`
+
+The cached fields' fetches run as **one dependency graph** inside an
+`asyncio.TaskGroup`: every fetch starts as soon as **its own** `depends_on`
+are done, and fetches without a dependency between them run at the same time.
+`async def` fetches run on the event loop ([which one](async.md#which-loop-runs-collection));
+sync fetches run on worker threads (or on the request thread inside a
+transaction, see [below](#transactions)).
+
+Seven fetches, where `f2` and `f3` need `f1`, `f4` needs `f3`, and `f6` needs
+`f5`:
+
+```python
+class PortfolioSerializer(BatchSerializer):
+    f1 = CachedServiceField(fetch=fetch_1, read_only=True)
+    f2 = CachedServiceField(fetch=fetch_2, depends_on=("f1",), read_only=True)
+    f3 = CachedServiceField(fetch=fetch_3, depends_on=("f1",), read_only=True)
+    f4 = CachedServiceField(fetch=fetch_4, depends_on=("f3",), read_only=True)
+    f5 = CachedServiceField(fetch=fetch_5, read_only=True)
+    f6 = CachedServiceField(fetch=fetch_6, depends_on=("f5",), read_only=True)
+    f7 = CachedServiceField(fetch=fetch_7, read_only=True)
+```
+
+They run as `TaskGroup(f1 → TaskGroup(f2, f3 → f4), f5 → f6, f7)`:
+
+```
+time ──────────────────────────────────────────────▶
+f1  ██████
+f2        ████████████
+f3        ████
+f4            ██████        ← starts when f3 ends; does not wait for f2
+f5  ████████
+f6          ██████          ← starts when f5 ends
+f7  ██████████
+```
+
+The request waits for the longest path (`f1 → f3 → f4` or `f1 → f2` here),
+not for the sum of all seven fetches. `collected` (and `self.collected`)
+still lists the maps in plan order (`f1`, `f2`, … `f7`), whatever order they
+finished in.
+
+### Every dependency is a wait
+
+!!! tip "Long chains slow collection down"
+    `depends_on` serializes fetches: each edge makes one fetch wait for
+    another, so a deep chain gives up the concurrency. Declare a dependency
+    only when the fetch really reads that map, and keep the graph shallow.
+
+```python
+# A chain: four round-trips one after another (latency = a + b + c + d).
+a = CachedServiceField(fetch=fetch_a, read_only=True)
+b = CachedServiceField(fetch=fetch_b, depends_on=("a",), read_only=True)
+c = CachedServiceField(fetch=fetch_c, depends_on=("b",), read_only=True)
+d = CachedServiceField(fetch=fetch_d, depends_on=("c",), read_only=True)
+
+# Only d really needs the others: three concurrent fetches, then one
+# (latency = max(a, b, c) + d).
+a = CachedServiceField(fetch=fetch_a, read_only=True)
+b = CachedServiceField(fetch=fetch_b, read_only=True)
+c = CachedServiceField(fetch=fetch_c, read_only=True)
+d = CachedServiceField(fetch=fetch_d, depends_on=("a", "b", "c"), read_only=True)
+```
+
+### What a fetch sees in `collected`
+
+A fetch receives a **snapshot** of the maps finished when it starts. It
+always holds its `depends_on` maps (and update/delete targets); a map that
+is not a declared dependency may or may not be there yet, so read only what
+you declared:
+
+```python
+def fetch_band(keys, collected, context):
+    tickers = collected["ticker"]  # guaranteed: declared below
+    # collected.get("customer") may be missing: it is not a dependency
+    return {isin: band_of(ticker) for isin, ticker in tickers.items()}
+
+
+band = CachedServiceField(fetch=fetch_band, depends_on=("ticker",), read_only=True)
+```
+
+Writing to the snapshot has no effect on the result; return the map instead.
+
+### Transactions
+
+Worker threads use their own database connections, which cannot see a
+transaction's uncommitted writes. So when the request's connection is in a
+transaction (`ATOMIC_REQUESTS = True`, an outer `atomic()`, Django's
+`TestCase`), or a database is a private in-memory SQLite database, sync
+fetches run **on the request thread**, one at a time, while it waits for the
+graph. They see the transaction; `async def` fetches
+stay concurrent. Details: [Database connections](async.md#database-connections).
+
+### Turning concurrency off
+
+`batch_concurrent_collection = False` runs the fetches one by one in plan
+order: sync fetches inline on the request thread, each `async def` fetch
+bridged to the loop on its own, all under one `COLLECT_TIMEOUT`. No loop is
+started for an all-sync serializer.
+
+```python
+class OrderViewSet(BatchMixin, GenericViewSet):
+    batch_serializer_class = OrderSerializer
+    batch_concurrent_collection = False
+```
+
+Outside a viewset, pass it as a keyword:
+
+```python
+serializer = OrderSerializer(data=rows, many=True, concurrent_collection=False)
+```
 
 ## Full control: BatchCollector
 
