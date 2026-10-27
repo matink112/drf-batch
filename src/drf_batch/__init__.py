@@ -16,7 +16,7 @@ from drf_batch.mixins import BatchMixin
 from drf_batch.retry import FixedRetryPolicy, RetryPolicy
 from drf_batch.serializers import BatchListSerializer, BatchSerializer
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     "BatchCollectionTimeout",

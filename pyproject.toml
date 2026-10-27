@@ -87,7 +87,7 @@ include = [
 [tool.commitizen]
 name = "cz_conventional_commits"
 version_provider = "commitizen"
-version = "0.1.0"
+version = "0.2.0"
 version_files = ["src/drf_batch/__init__.py:__version__"]
 tag_format = "v$version"
 # Annotated, so `git push --follow-tags` pushes the tag with the bump commit.
