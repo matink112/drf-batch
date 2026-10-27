@@ -15,6 +15,46 @@ POST /orders/batch/   →   201 {"count": 2}
 POST /orders/batch/   →   400 [{}, {"ticker": ["Ticker 'XYZ' not found."]}]
 ```
 
+## Highlights
+
+```text
+request latency ≈ longest fetch chain  +  in-memory validation  +  bulk write
+```
+
+- **Every lookup is fetched once, concurrently.** Each cached field is one
+  query or one service call for the whole batch, no matter how many rows.
+  All fetches run as one `asyncio.TaskGroup`: `async def` fetches on the
+  event loop, sync ORM fetches on worker threads
+  ([caveats](#transactions)). Ten FK fields plus three
+  slow services cost about as much as the slowest of them, not the sum.
+- **`depends_on`: fetches as a dependency graph**
+  ([details](#concurrency-and-depends_on)). Declare which maps a fetch
+  reads, and it starts the moment those are ready, while unrelated fetches
+  keep running. A service call can be built from database rows, and a
+  database query can be scoped by a service result, with no collector class
+  and no ordering code. Cycles and unknown names fail at serializer
+  construction, not mid-request.
+- **Database and services in one graph.** `CachedRelatedField` and
+  `CachedServiceField` (sync or `async`) are both nodes in the same graph,
+  and both are validated the same way (a miss is a 400 row error).
+- **Validation does no I/O.** Rows are validated against the fetched maps, so
+  `validate()` receives real model instances and can apply cross-row rules
+  through `self.collected` at CPU speed.
+- **Whole-batch uniqueness.** Duplicates inside the payload and clashes with
+  existing rows are a 409 before anything is written.
+- **All-or-none bulk writes.** `bulk_create` and grouped `bulk_update` by
+  default, per-row when you need signals and `save()` overrides, optionally
+  retried. One invalid row rejects the whole batch.
+- **DRF's authorization rules on every row.** Update and delete targets come
+  from `get_queryset()` and pass `check_object_permissions()`; lookups can be
+  scoped with `queryset=` / `get_queryset()`.
+- **One route, three DRF actions.** `BatchMixin` adds `/<resource>/batch/`
+  with `POST` (create), `PATCH` (partial update by pk) and `DELETE` (delete by
+  pk), so permissions and throttles can treat each one separately.
+- **Index-aligned errors** that existing `many=True` clients already
+  understand.
+- **WSGI and ASGI, typed, with OpenAPI** through drf-spectacular.
+
 ## The gap
 
 DRF's list serializers validate each row individually, then save one by one:
