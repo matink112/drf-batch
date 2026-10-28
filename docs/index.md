@@ -90,4 +90,5 @@ pip install drf-batch
 pip install "drf-batch[spectacular]"   # with OpenAPI support
 ```
 
-Next: the [Quickstart](quickstart.md).
+Next: the [Quickstart](quickstart.md), then the [cookbook](https://github.com/matink112/drf-batch-cookbook) for a
+runnable scenario per option.

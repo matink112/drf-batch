@@ -7,8 +7,10 @@ all-or-none.
 `drf-batch` is to the write path what `drf-serializer-prefetch` is to the read
 path, and what DataLoader is to GraphQL.
 
-**Documentation:** guides and the API reference are in
-[`docs/`](docs/index.md) (build with `nox -s docs`).
+**Documentation:** <https://matink112.github.io/drf-batch/>: guides and the
+API reference (sources in [`docs/`](docs/index.md); build locally with
+`nox -s docs`). Runnable scenarios: the
+[drf-batch cookbook](https://github.com/matink112/drf-batch-cookbook).
 
 ```json
 POST /orders/batch/   →   201 {"count": 2}
@@ -242,6 +244,14 @@ indexes:
   {"ticker": ["Ticker 'XYZ' not found."]}
 ]
 ```
+
+### More scenarios
+
+The [drf-batch cookbook](https://github.com/matink112/drf-batch-cookbook) is a runnable project with 19 scenarios
+across six domains. Each one focuses on a cached-field option (`lookup`,
+`queryset`, `map`, `derived_from`, `key`, `read_only`, `depends_on`, async
+fetches, collectors, ...) and walks through real `POST` / `PATCH` / `PUT` /
+`DELETE` batches, with one docs page per scenario.
 
 ## Permissions and scoping
 

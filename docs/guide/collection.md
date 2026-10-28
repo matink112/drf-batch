@@ -11,6 +11,10 @@ fields are *cached*, and before any row is validated the list serializer
 The maps are available as `self.collected` in the serializer (and as
 `context["collected"]`), keyed by the field's map name.
 
+!!! tip "Learning by example"
+    The [drf-batch cookbook](https://github.com/matink112/drf-batch-cookbook) shows each option below in a runnable
+    scenario, with the batches it accepts and rejects.
+
 ## `CachedRelatedField`
 
 A relation resolved from the database. A hit returns the **model instance**,
