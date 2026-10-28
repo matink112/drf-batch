@@ -102,6 +102,7 @@ class ServiceOrderViewSet(BatchMixin, GenericViewSet):
 
     queryset = Order.objects.all()
     batch_serializer_class: type[BatchSerializer] | None = ServiceOrderSerializer
+    batch_actions = ("create", "update", "replace", "destroy")
     authentication_classes = [BasicAuthentication, SessionAuthentication]
     permission_classes = [IsAuthenticated]
 

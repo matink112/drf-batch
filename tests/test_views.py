@@ -5,7 +5,7 @@ from django.test import override_settings
 from rest_framework.test import APIClient
 
 from tests import conftest
-from tests.apps.demo.models import Order, SymbolOrder
+from tests.apps.demo.models import Order, SymbolOrder, Ticker
 
 BATCH_URL = "/orders/batch/"
 SMALL_BATCH_URL = "/small-orders/batch/"
@@ -189,7 +189,7 @@ class TestServiceField:
         assert response.json() == {"count": 1}
         assert Order.objects.count() == 1
 
-    def test_service_field_miss_is_400(self, client, tickers, customers):
+    def test_read_only_service_field_value_is_ignored(self, client, tickers, customers):
         rows = [
             {
                 "ticker": "1101",
@@ -201,26 +201,24 @@ class TestServiceField:
         ]
         response = client.post(SERVICE_BATCH_URL, rows)
 
-        assert response.status_code == 400
-        assert response.json() == [{"band": ["Object 'X' not found."]}]
-        assert Order.objects.count() == 0
+        assert response.status_code == 201
+        assert Order.objects.count() == 1
 
     def test_db_after_service_scoped_miss_is_400(self, client, tickers, customers):
+        Ticker.objects.create(isin="1103", name="Gamma Corp")  # no band
         rows = [
             {
-                "ticker": "1101",
+                "ticker": "1103",
                 "customer": "112001",
                 "volume": 10,
                 "reference_id": "SV3",
-                "band": "A",
-                "exchange_ticker": "1102",
             }
         ]
         response = client.post(SERVICE_BATCH_URL, rows)
 
         assert response.status_code == 400
         assert response.json() == [
-            {"exchange_ticker": ["Ticker '1102' is not listed on exchange A."]}
+            {"exchange_ticker": ["Ticker is not listed on exchange A."]}
         ]
         assert Order.objects.count() == 0
 

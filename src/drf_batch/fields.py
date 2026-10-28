@@ -14,6 +14,12 @@ collector class at all.
 - :class:`CachedServiceField` fetches the map with a user callable
   (sync or ``async def``).
 
+Where a row's key comes from (see :meth:`CachedField.stored_key_path` and
+:meth:`CachedField.derived_key`): a writable field the row sends uses the
+row's value; ``read_only`` fields never read the row. Otherwise the key is
+**derived** from other fields (``derived_from=``) or, on update, read from
+the **stored** row. Only a key the row sent can be a "not found" error.
+
 A hit returns the **map value** (for related fields: the model instance), so
 ``ModelSerializer.create`` can pass it straight through as an FK value and a
 user ``validate()`` can inspect it with zero I/O during validation.
@@ -62,6 +68,14 @@ def _source_attribute(field: serializers.Field) -> str | None:
     return str(source).split(".")[0]
 
 
+def _model_field(model: type[models.Model], attribute: str | None) -> Any:
+    """``model``'s field named ``attribute``, or ``None``."""
+    try:
+        return model._meta.get_field(attribute or "")
+    except FieldDoesNotExist:
+        return None
+
+
 class CachedField(serializers.Field):
     """Base class for fields resolved against the request's collected maps.
 
@@ -74,6 +88,15 @@ class CachedField(serializers.Field):
         finish first. Fetches without a dependency between them run
         concurrently; every fetch receives a snapshot of the maps collected
         so far, which always includes its ``depends_on`` maps.
+    :param derived_from: a field name or a tuple of names the key is built
+        from when the row does not send this field (always, for a
+        ``read_only`` field). Each name is a serializer field (the row's
+        value, else the stored value on update) or a model field (the stored
+        value); a cached field gives its own key for the row.
+    :param key: builds the key from the ``derived_from`` values (passed
+        positionally, ``None`` included); return ``None`` for no key. The
+        default is the value for one name, a tuple for several, and no key
+        when any value is ``None``.
     """
 
     default_error_messages = {  # noqa: RUF012
@@ -89,11 +112,28 @@ class CachedField(serializers.Field):
         *,
         error: str | None = None,
         depends_on: Any = (),
+        derived_from: str | tuple[str, ...] | None = None,
+        key: Callable[..., Any] | None = None,
         **kwargs: Any,
     ) -> None:
+        if isinstance(derived_from, str):
+            derived_from = (derived_from,)
+        derived_from = tuple(derived_from or ())
+        if key is not None and not callable(key):
+            raise TypeError(
+                f"{type(self).__name__}: key must be callable, "
+                f"got {type(key).__name__}."
+            )
+        if key is not None and not derived_from:
+            raise TypeError(
+                f"{type(self).__name__}: key= builds the key from the "
+                "derived_from values; pass derived_from= too."
+            )
         self._map = map
         self.error = error
         self.depends_on = tuple(depends_on)
+        self.derived_from: tuple[str, ...] = derived_from
+        self._key = key
         super().__init__(**kwargs)
 
     def bind(self, field_name: str, parent: Any) -> None:
@@ -131,6 +171,50 @@ class CachedField(serializers.Field):
         if value is None:
             return NO_KEY
         return value
+
+    def implied_key(self, value: Any) -> Any:
+        """Coerce a key the row did not send (stored or derived).
+
+        :meth:`prepare_key`, but a value that cannot be coerced gives no key
+        (:data:`NO_KEY`) instead of a row error: the client never sent it.
+        """
+        try:
+            return self.prepare_key(value)
+        except ValidationError:
+            return NO_KEY
+
+    def derived_key(self, values: tuple[Any, ...]) -> Any:
+        """The key built from the ``derived_from`` values (:data:`NO_KEY` if none)."""
+        if self._key is not None:
+            return self.implied_key(self._key(*values))
+        if any(value is None for value in values):
+            return NO_KEY
+        return self.implied_key(values[0] if len(values) == 1 else values)
+
+    def stored_key_path(
+        self, model: type[models.Model]
+    ) -> tuple[tuple[str, ...], str | None] | None:
+        """Where an update target stores this field's key.
+
+        ``(attributes, select_related)``: the attribute chain to read on the
+        target, and the relation the target query must join for it (or
+        ``None``). ``None`` when the field's source is not a concrete field
+        of ``model``. A ForeignKey/OneToOneField reads its column
+        (``ticker_id``).
+        """
+        model_field = _model_field(model, _source_attribute(self))
+        if model_field is None or not model_field.concrete:
+            return None
+        return (model_field.attname,), None
+
+    def stored_key(self, instance: Any, path: tuple[str, ...]) -> Any:
+        """The key stored on ``instance`` at ``path`` (:data:`NO_KEY` if none)."""
+        value = instance
+        for attribute in path:
+            value = getattr(value, attribute, None)
+            if value is None:
+                return NO_KEY
+        return self.implied_key(value)
 
     def fetch(
         self, keys: set[Any], collected: dict[str, Any], context: BatchContext
@@ -331,6 +415,11 @@ class CachedRelatedField(CachedField):
         ``"pk"``.
     :param error: miss-message template (``{value}`` = coerced value).
     :param depends_on: cached fields that must be fetched first.
+    :param derived_from: see :class:`CachedField` (also ``key``).
+
+    On update, a row that omits a writable related field contributes the
+    target's stored key only when another cached field reads this one
+    (``derived_from`` or ``depends_on``); nothing else needs it.
     """
 
     def __init__(
@@ -342,6 +431,8 @@ class CachedRelatedField(CachedField):
         lookup: str | None = None,
         error: str | None = None,
         depends_on: Any = (),
+        derived_from: str | tuple[str, ...] | None = None,
+        key: Callable[..., Any] | None = None,
         **kwargs: Any,
     ) -> None:
         self.queryset = queryset
@@ -350,7 +441,14 @@ class CachedRelatedField(CachedField):
         self._model = model
         self.lookup = lookup or "pk"
         self._lookup_field: models.Field | None = None
-        super().__init__(map=map, error=error, depends_on=depends_on, **kwargs)
+        super().__init__(
+            map=map,
+            error=error,
+            depends_on=depends_on,
+            derived_from=derived_from,
+            key=key,
+            **kwargs,
+        )
 
     def _resolve_model(self) -> Any:
         if self._model is not None:
@@ -394,6 +492,23 @@ class CachedRelatedField(CachedField):
                         f"{model.__name__} has no field '{self.lookup}'."
                     ) from None
         return self._lookup_field
+
+    def stored_key_path(
+        self, model: type[models.Model]
+    ) -> tuple[tuple[str, ...], str | None] | None:
+        """The stored related object's lookup value.
+
+        A lookup on the relation's target field (the pk by default) reads
+        the FK column (``ticker_id``, no join); another lookup reads it
+        across the relation (``ticker.isin``), joined in the target query.
+        """
+        model_field = _model_field(model, _source_attribute(self))
+        if not isinstance(model_field, (models.ForeignKey, models.OneToOneField)):
+            return super().stored_key_path(model)
+        lookup_field = self._resolve_lookup_field()
+        if lookup_field == model_field.target_field:
+            return (model_field.attname,), None
+        return (model_field.name, lookup_field.attname), model_field.name
 
     def prepare_key(self, value: Any) -> Any:
         if value is None:
@@ -442,6 +557,11 @@ class CachedServiceField(CachedField):
         overrides :meth:`fetch`.
     :param error: miss-message template (``{value}`` = coerced value).
     :param depends_on: cached fields that must be fetched first.
+    :param derived_from: see :class:`CachedField` (also ``key``).
+
+    On update, a row that omits the field contributes the target's stored
+    value of the field's model attribute (column, or FK column), so the
+    service sees a key for every row without any opt-in.
 
     ``prepare_key`` is the identity here (``None`` -> ``NO_KEY``); override
     it in a subclass to coerce service keys.
@@ -459,6 +579,8 @@ class CachedServiceField(CachedField):
         fetch: Any = None,
         error: str | None = None,
         depends_on: Any = (),
+        derived_from: str | tuple[str, ...] | None = None,
+        key: Callable[..., Any] | None = None,
         **kwargs: Any,
     ) -> None:
         if fetch is None and type(self).fetch is CachedServiceField.fetch:
@@ -472,7 +594,14 @@ class CachedServiceField(CachedField):
                 f"got {type(fetch).__name__}."
             )
         self._fetch = fetch
-        super().__init__(map=map, error=error, depends_on=depends_on, **kwargs)
+        super().__init__(
+            map=map,
+            error=error,
+            depends_on=depends_on,
+            derived_from=derived_from,
+            key=key,
+            **kwargs,
+        )
 
     def fetch(
         self, keys: set[Any], collected: dict[str, Any], context: BatchContext

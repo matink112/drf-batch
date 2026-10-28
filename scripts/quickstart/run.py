@@ -22,6 +22,7 @@ Ticker.objects.create(isin="1103", name="Gamma Corp")
 Customer.objects.create(isin="112001", name="Acme Trading")
 Customer.objects.create(isin="112002", name="Beta Trading")
 Customer.objects.create(isin="112003", name="Gamma Trading")
+Customer.objects.create(isin="112004", name="Delta Trading")
 
 client = APIClient()
 client.force_authenticate(user=User.objects.create_user("demo", password="demo-pass"))
@@ -61,23 +62,22 @@ assert Order.objects.count() == 3  # nothing from the rejected batch
 # --- Service cache field + model cache fields, together --------------------
 # /service-orders/batch/ uses ServiceOrderSerializer:
 #   band (CachedServiceField, mocked fetch, depends_on=ticker) runs AFTER the
-#   ticker DB lookup and builds {band: [isins]} from its result;
+#   ticker DB lookup and maps each row's ticker to its band;
 #   exchange_ticker (subclass of CachedRelatedField, depends_on=band) runs a
 #   second DB query scoped to the service's band "A";
-#   validate() then consumes the service map with zero I/O.
+#   both are read_only and keyed by the row's ticker (derived_from), so
+#   validate() consumes the service results with zero I/O via self.cached().
 
-# Happy path: a row may assert the band and the scoped ticker itself; both
-# hit their maps, and the unlisted 1103 simply has no band (still orderable).
+# Happy path. band is read_only: the row's "C" is ignored, not checked.
 svc_ok_rows = [
     {
         "ticker": "1101",
         "customer": "112003",
-        "band": "A",
-        "exchange_ticker": "1101",
+        "band": "C",
         "volume": 3,
         "reference_id": "SVC-1",
     },
-    {"ticker": "1103", "customer": "112003", "volume": 4, "reference_id": "SVC-2"},
+    {"ticker": "1101", "customer": "112004", "volume": 4, "reference_id": "SVC-2"},
 ]
 response = client.post("/service-orders/batch/", svc_ok_rows, format="json")
 assert response.status_code == 201, response.content
@@ -102,16 +102,14 @@ assert response.json() == [{"ticker": ["Ticker is suspended on exchange B."]}], 
     response.content
 )
 
-# A row-asserted band the service map does not list -> row error. (The pair
-# stays unique: DRF's ModelSerializer also runs the model's unique
-# constraint validators during row validation.)
+# An unlisted ticker (no band): the scoped DB fetch does not return it, and
+# validate() rejects the row via self.cached("exchange_ticker").
 response = client.post(
     "/service-orders/batch/",
     [
         {
             "ticker": "1103",
             "customer": "112001",
-            "band": "C",
             "volume": 3,
             "reference_id": "SVC-4",
         }
@@ -119,29 +117,26 @@ response = client.post(
     format="json",
 )
 assert response.status_code == 400, response.content
-assert response.json() == [{"band": ["Object 'C' not found."]}], response.content
-
-# A row-asserted exchange_ticker the scoped DB fetch did not return: the
-# band map holds no band "A" for this batch, so the scoped query finds
-# nothing and "1102" misses (with the field's own error template).
-response = client.post(
-    "/service-orders/batch/",
-    [
-        {
-            "ticker": "1103",
-            "customer": "112002",
-            "exchange_ticker": "1102",
-            "volume": 3,
-            "reference_id": "SVC-5",
-        }
-    ],
-    format="json",
-)
-assert response.status_code == 400, response.content
 assert response.json() == [
-    {"exchange_ticker": ["Ticker '1102' is not listed on exchange A."]}
+    {"exchange_ticker": ["Ticker is not listed on exchange A."]}
 ], response.content
 assert Order.objects.count() == 5  # nothing from the rejected batches
+
+# PATCH without a ticker: the keys come from the stored ticker. SVC-1 holds
+# 1101 (band A): fine. REF-2 holds 1102 (band B): still suspended.
+svc1 = Order.objects.get(reference_id="SVC-1")
+response = client.patch(
+    "/service-orders/batch/", [{"id": svc1.pk, "volume": 9}], format="json"
+)
+assert response.status_code == 200, response.content
+ref2 = Order.objects.get(reference_id="REF-2")
+response = client.patch(
+    "/service-orders/batch/", [{"id": ref2.pk, "volume": 9}], format="json"
+)
+assert response.status_code == 400, response.content
+assert response.json() == [{"ticker": ["Ticker is suspended on exchange B."]}], (
+    response.content
+)
 
 # --- Batch update: PATCH by pk, partial --------------------------------------
 order1 = Order.objects.get(reference_id="REF-1")
@@ -224,7 +219,8 @@ assert Order.objects.count() == 4
 print(
     "quickstart OK: auto collection (no collector); int ISIN coerced; "
     "400 index-aligned error; all-or-none holds; "
-    "mocked service + model cache fields (both dependency directions); "
+    "mocked service + model cache fields (both dependency directions, "
+    "keys derived from the sent or stored ticker); "
     "partial PATCH by pk (404 on missing target); DELETE by pk "
     "(404 on missing pk); 409 in-payload + existing-record conflicts"
 )

@@ -46,13 +46,13 @@ _LISTINGS: dict[str, str] = {"Alpha Corp": "A", "Beta Corp": "B"}
 def fetch_bands(
     keys: set[Any], collected: dict[str, Any], context: Any
 ) -> dict[Any, Any]:
-    """Service-after-DB: build the {band: [isins]} map from the ticker query."""
-    bands: dict[Any, Any] = {}
-    for isin, ticker in collected.get("ticker", {}).items():
-        band = _LISTINGS.get(ticker.name)
-        if band is not None:
-            bands.setdefault(band, []).append(isin)
-    return bands
+    """Service-after-DB: ``{isin: band}`` for the rows' tickers (sent or stored)."""
+    tickers = collected.get("ticker", {})
+    return {
+        isin: _LISTINGS[tickers[isin].name]
+        for isin in keys
+        if isin in tickers and tickers[isin].name in _LISTINGS
+    }
 
 
 class ExchangeScopedTickerField(CachedRelatedField):
@@ -61,7 +61,8 @@ class ExchangeScopedTickerField(CachedRelatedField):
     def fetch(
         self, keys: set[Any], collected: dict[str, Any], context: Any
     ) -> dict[Any, Any]:
-        allowed = set(collected.get("band", {}).get("A", ()))
+        bands = collected.get("band", {})
+        allowed = {isin for isin, band in bands.items() if band == "A"}
         return Ticker.objects.filter(isin__in=(keys & allowed)).in_bulk(
             field_name="isin"
         )
@@ -74,20 +75,25 @@ class ServiceOrderSerializer(BatchSerializer):
       1. ticker/customer   -> DB, auto (declaration order)
       2. band              -> service, consumes collected["ticker"]
       3. exchange_ticker   -> DB again, scoped to the service's band "A"
-    Both service-backed fields are read_only: the row may optionally supply
-    their value (checked against the map), and validate() reads the maps via
-    self.collected with zero I/O.
+    Both are read_only (the row's value is ignored) and keyed by the row's
+    ticker (derived_from): the one it sends, or the stored one on a PATCH.
+    validate() reads them via self.cached() with zero I/O.
     """
 
     ticker = CachedRelatedField(lookup="isin", error="Ticker '{value}' not found.")
     customer = CachedRelatedField(lookup="isin", error="Customer '{value}' not found.")
-    band = CachedServiceField(fetch=fetch_bands, depends_on=("ticker",), read_only=True)
+    band = CachedServiceField(
+        fetch=fetch_bands,
+        derived_from="ticker",
+        depends_on=("ticker",),
+        read_only=True,
+    )
     exchange_ticker = ExchangeScopedTickerField(
         model=Ticker,
         lookup="isin",
+        derived_from="ticker",
         depends_on=("band",),
         read_only=True,
-        error="Ticker '{value}' is not listed on exchange A.",
     )
     volume = serializers.IntegerField(min_value=1)
     reference_id = serializers.CharField(max_length=64)
@@ -105,9 +111,12 @@ class ServiceOrderSerializer(BatchSerializer):
         )
 
     def validate(self, attrs: dict[str, Any]) -> dict[str, Any]:
-        # Cross-row rule that consumes the service result (zero I/O):
-        # band "B" tickers are suspended.
-        suspended = self.collected.get("band", {}).get("B", [])
-        if attrs["ticker"].isin in suspended:
+        # Rules that consume the service results (zero I/O). self.cached()
+        # works on a PATCH that omits ticker too: attrs["ticker"] would not.
+        if self.cached("band") == "B":
             raise ValidationError({"ticker": ["Ticker is suspended on exchange B."]})
+        if self.cached("exchange_ticker") is None:
+            raise ValidationError(
+                {"exchange_ticker": ["Ticker is not listed on exchange A."]}
+            )
         return attrs

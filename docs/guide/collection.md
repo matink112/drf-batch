@@ -3,7 +3,8 @@
 Collection is **serializer-driven**: a `BatchSerializer` declares which of its
 fields are *cached*, and before any row is validated the list serializer
 
-1. extracts and **coerces** each row's key for every cached field,
+1. extracts and **coerces** each row's key for every cached field (the value
+   the row sends, or a [derived or stored key](#where-a-key-comes-from)),
 2. fetches **one map per field** for the whole batch (`{key: value}`),
 3. validates every row against those maps, with no further I/O.
 
@@ -28,7 +29,9 @@ ticker = CachedRelatedField(lookup="isin", error="Ticker '{value}' not found.")
 | `map` | the field name | key in `collected` (two fields may share one map) |
 | `error` | `"Object '{value}' not found."` | miss message; `{value}` is the coerced key |
 | `depends_on` | `()` | cached fields whose fetches must finish first ([concurrency](#concurrency-and-depends_on)) |
-| `read_only` | `False` | excluded from `validated_data`; a supplied value is still checked |
+| `derived_from` | `()` | field name(s) the key is built from when the row does not send it ([keys](#where-a-key-comes-from)) |
+| `key` | `None` | callable building the key from the `derived_from` values |
+| `read_only` | `False` | the row's value is **ignored**; excluded from `validated_data` |
 
 The lookup model is derived from the ForeignKey (or OneToOneField) on
 `Meta.model` named by the field's `source`. A non-FK lookup needs `model=` or
@@ -116,19 +119,21 @@ _LISTINGS = {"Alpha Corp": "A", "Beta Corp": "B"}  # ticker name -> band
 
 
 def fetch_bands(keys, collected, context):
-    # Service-after-DB: build the {band: [isins]} map from the ticker query.
-    bands = {}
-    for isin, ticker in collected.get("ticker", {}).items():
-        band = _LISTINGS.get(ticker.name)
-        if band is not None:
-            bands.setdefault(band, []).append(isin)
-    return bands
+    # Service-after-DB: {isin: band} for the rows' tickers, read from the
+    # ticker query.
+    tickers = collected.get("ticker", {})
+    return {
+        isin: _LISTINGS[tickers[isin].name]
+        for isin in keys
+        if isin in tickers and tickers[isin].name in _LISTINGS
+    }
 
 
 class ExchangeScopedTickerField(CachedRelatedField):
     # DB-after-service: only fetch tickers the service listed on exchange A.
     def fetch(self, keys, collected, context):
-        allowed = set(collected.get("band", {}).get("A", ()))
+        bands = collected.get("band", {})
+        allowed = {isin for isin, band in bands.items() if band == "A"}
         return Ticker.objects.filter(isin__in=(keys & allowed)).in_bulk("isin")
 
 
@@ -137,15 +142,22 @@ class ServiceOrderSerializer(BatchSerializer):
     #   1. ticker, customer -> DB, concurrently (no dependencies)
     #   2. band             -> service, as soon as ticker is done
     #   3. exchange_ticker  -> DB again, scoped to the service's band "A"
+    # band and exchange_ticker are read-only and keyed by the row's ticker
+    # (derived_from): the one it sends, or the stored one on a PATCH.
     ticker = CachedRelatedField(lookup="isin", error="Ticker '{value}' not found.")
     customer = CachedRelatedField(lookup="isin", error="Customer '{value}' not found.")
-    band = CachedServiceField(fetch=fetch_bands, depends_on=("ticker",), read_only=True)
+    band = CachedServiceField(
+        fetch=fetch_bands,
+        derived_from="ticker",
+        depends_on=("ticker",),
+        read_only=True,
+    )
     exchange_ticker = ExchangeScopedTickerField(
         model=Ticker,
         lookup="isin",
+        derived_from="ticker",
         depends_on=("band",),
         read_only=True,
-        error="Ticker '{value}' is not listed on exchange A.",
     )
     volume = serializers.IntegerField(min_value=1)
     reference_id = serializers.CharField(max_length=64)
@@ -163,11 +175,15 @@ class ServiceOrderSerializer(BatchSerializer):
         )
 
     def validate(self, attrs):
-        # Cross-row rule that consumes the service result (zero I/O):
-        # band "B" tickers are suspended.
-        if attrs["ticker"].isin in self.collected.get("band", {}).get("B", []):
+        # Rules that consume the service results (zero I/O). self.cached()
+        # works on a PATCH that omits ticker too: attrs["ticker"] would not.
+        if self.cached("band") == "B":
             raise serializers.ValidationError(
                 {"ticker": ["Ticker is suspended on exchange B."]}
+            )
+        if self.cached("exchange_ticker") is None:
+            raise serializers.ValidationError(
+                {"exchange_ticker": ["Ticker is not listed on exchange A."]}
             )
         return attrs
 ```
@@ -177,8 +193,7 @@ curl -X POST http://localhost:8000/service-orders/batch/ \
   -H 'Content-Type: application/json' \
   -H 'Authorization: Basic ...' \
   -d '[
-    {"ticker": "1101", "customer": "112002", "band": "A",
-     "exchange_ticker": "1101", "volume": 3, "reference_id": "SVC-1"}
+    {"ticker": "1101", "customer": "112002", "volume": 3, "reference_id": "SVC-1"}
   ]'
 ```
 
@@ -194,11 +209,82 @@ curl -X POST http://localhost:8000/service-orders/batch/ \
   results.
 - A cycle (or an unknown `depends_on` name) is an `ImproperlyConfigured` at
   serializer construction.
-- Read-only cached fields are excluded from `validated_data` (so bulk create
-  is unaffected); a row may optionally supply their value, which is checked
-  against the map like any other hit/miss (a `"band": "C"` that the service
-  map does not list is a 400 row error, as is an `exchange_ticker` the scoped
-  fetch did not return).
+- Read-only cached fields never read the row and are excluded from
+  `validated_data` (so bulk create is unaffected). Their keys come from
+  `derived_from` here; a key the row did not send is never a "not found"
+  error, so `validate()` checks `self.cached(...)` itself.
+
+## Where a key comes from
+
+Each row gets a key for every cached field, in this order:
+
+| Field | Row sends it | Row omits it, `POST` | Row omits it, `PATCH` / `PUT` |
+|---|---|---|---|
+| writable | the row's value (`null`: no key) | `derived_from`, else no key | `derived_from`, else the stored value |
+| `read_only` | **ignored** | `derived_from`, else no key | `derived_from`, else the stored value |
+
+`DELETE` rows are bare pks: nothing is collected.
+
+**The stored value** is read from the update target, from the model field the
+cached field maps to (its `source`):
+
+- a column: its value (`reference_id = CachedServiceField(...)` on a `PATCH`
+  without `reference_id` fetches the stored `reference_id`);
+- a ForeignKey / OneToOneField on a `CachedServiceField`: the FK column
+  (`customer_id`);
+- a `CachedRelatedField`: the stored object's lookup value. A `pk` lookup reads
+  the FK column; any other (`isin`) is read across the relation, which the
+  target query joins (one query, no N+1);
+- not a model field: no key.
+
+A service field therefore sees a key for **every** row on `PATCH`, with no
+opt-in. A writable `CachedRelatedField` the row omits only adds its stored
+key when another cached field reads it (`derived_from` or `depends_on`), so a
+plain `PATCH` costs no extra query.
+
+**`derived_from`** builds the key from other fields, for a row that does not
+send the field (always, for `read_only`):
+
+```python
+class OrderSerializer(BatchSerializer):
+    ticker = CachedRelatedField(lookup="isin")
+    volume = serializers.IntegerField(min_value=1)
+    # key: the row's ticker isin (sent, or stored on a PATCH)
+    band = CachedServiceField(fetch=fetch_bands, derived_from="ticker", read_only=True)
+    # key: (isin, volume), each sent or stored
+    limit = CachedServiceField(
+        fetch=fetch_limits, derived_from=("ticker", "volume"), read_only=True
+    )
+    # key built by a callable; return None for no key
+    tier = CachedServiceField(
+        fetch=fetch_tiers,
+        derived_from="volume",
+        key=lambda volume: None if volume is None else volume // 1000,
+        read_only=True,
+    )
+```
+
+- Each name is a serializer field or a model field:
+  - a cached field gives its own key for the row (chains are fine);
+  - a plain field gives the row's value converted by the field
+    (`to_internal_value`), or the stored value on update;
+  - a model field not on the serializer gives the stored value.
+- Without `key=`, one name gives its value and several names give a tuple.
+  Any `None` among them means no key.
+- `derived_from` works on keys, before any fetch, so it adds no waiting. Add
+  `depends_on` only if the fetch reads another field's **results**
+  (`collected["ticker"]` above).
+
+**Misses.** Only a value the row sent can be a "not found" error. A derived
+or stored key that the fetch does not return is not an error: read it in
+`validate()` with **`self.cached(name)`**, which gives the field's value for
+the current row (`None` when there is no key or no hit), and reject the row
+yourself.
+
+Configuration errors fail when the serializer is built
+(`ImproperlyConfigured`). These are an unknown name, the field itself, a plain
+DRF related field (declare it as a `CachedRelatedField`), a `derived_from`
+cycle, and `key=` without `derived_from`.
 
 ## Concurrency and `depends_on`
 

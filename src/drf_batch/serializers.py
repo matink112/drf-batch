@@ -31,7 +31,7 @@ from rest_framework import serializers
 from drf_batch.collectors import BatchContext
 from drf_batch.config import BatchConfig, BatchOperation
 from drf_batch.conflicts import resolve_conflict_rules, strip_owned_unique_validators
-from drf_batch.fields import CachedField
+from drf_batch.fields import NO_KEY, CachedField
 from drf_batch.pipeline import PipelineContext, build_collection_plan, build_pipeline
 from drf_batch.writers import check_bulk_fields, make_writer
 
@@ -49,7 +49,9 @@ class BatchSerializer(serializers.ModelSerializer):
     :class:`~drf_batch.collectors.BatchCollector`) are available as
     ``self.collected`` (a plain dict; ``{}`` when nothing was collected), so
     cached fields and user ``validate()`` methods can resolve lookups with
-    zero I/O.
+    zero I/O. :meth:`cached` returns one cached field's value for the row
+    being validated, including fields the row did not send (``read_only``,
+    derived or stored keys).
 
     Meta options:
 
@@ -60,6 +62,10 @@ class BatchSerializer(serializers.ModelSerializer):
       model's ``unique`` fields, ``unique_together`` and unconditional
       ``UniqueConstraint``s (replacing DRF's per-row unique validators).
     """
+
+    # {cached field name: key} of the row being validated, set by the
+    # pipeline around each row's validation (read by :meth:`cached`).
+    _batch_row_keys: dict[str, Any] | None = None
 
     @classmethod
     def many_init(cls, *args: Any, **kwargs: Any) -> BatchListSerializer:
@@ -91,6 +97,28 @@ class BatchSerializer(serializers.ModelSerializer):
     def collected(self) -> dict[str, Any]:
         collected = self.context.get("collected")
         return collected if isinstance(collected, dict) else {}
+
+    def cached(self, name: str) -> Any:
+        """The collected value of cached field ``name`` for the current row.
+
+        For ``validate()`` / ``validate_<field>()``. The key is the one the
+        row sent, else the field's derived (``derived_from``) or stored
+        (update) key. ``None`` when the row has no key for the field, the
+        fetch did not return it, or outside batch validation. A key the row
+        did not send is never a "not found" error: check for ``None`` here.
+
+        A writable :class:`~drf_batch.CachedRelatedField` the row omits has
+        a stored key only when another cached field reads it
+        (``derived_from`` / ``depends_on``); use ``self.instance`` otherwise.
+        """
+        field = self.fields.get(name)
+        if not isinstance(field, CachedField):
+            raise KeyError(f"'{name}' is not a cached field of {type(self).__name__}.")
+        key = (self._batch_row_keys or {}).get(name, NO_KEY)
+        if key is NO_KEY:
+            return None
+        mapping = self.collected.get(field.map)
+        return mapping.get(key) if isinstance(mapping, dict) else None
 
     def get_cached_fields(self) -> list[CachedField]:
         """All declared :class:`CachedField` instances, in field order."""

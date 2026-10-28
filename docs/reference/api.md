@@ -12,7 +12,7 @@ without notice before 1.0.
 
 ::: drf_batch.BatchSerializer
     options:
-      members: [collected, get_cached_fields, many_init]
+      members: [collected, cached, get_cached_fields, many_init]
 
 ::: drf_batch.BatchListSerializer
     options:
@@ -28,7 +28,7 @@ without notice before 1.0.
 
 ::: drf_batch.CachedField
     options:
-      members: [prepare_key, fetch, to_representation]
+      members: [prepare_key, fetch, derived_key, stored_key_path, to_representation]
 
 ::: drf_batch.CachedRelatedField
     options:

@@ -323,19 +323,21 @@ _LISTINGS = {"Alpha Corp": "A", "Beta Corp": "B"}  # ticker name -> band
 
 
 def fetch_bands(keys, collected, context):
-    # Service-after-DB: build the {band: [isins]} map from the ticker query.
-    bands = {}
-    for isin, ticker in collected.get("ticker", {}).items():
-        band = _LISTINGS.get(ticker.name)
-        if band is not None:
-            bands.setdefault(band, []).append(isin)
-    return bands
+    # Service-after-DB: {isin: band} for the rows' tickers, read from the
+    # ticker query.
+    tickers = collected.get("ticker", {})
+    return {
+        isin: _LISTINGS[tickers[isin].name]
+        for isin in keys
+        if isin in tickers and tickers[isin].name in _LISTINGS
+    }
 
 
 class ExchangeScopedTickerField(CachedRelatedField):
     # DB-after-service: only fetch tickers the service listed on exchange A.
     def fetch(self, keys, collected, context):
-        allowed = set(collected.get("band", {}).get("A", ()))
+        bands = collected.get("band", {})
+        allowed = {isin for isin, band in bands.items() if band == "A"}
         return Ticker.objects.filter(isin__in=(keys & allowed)).in_bulk("isin")
 
 
@@ -344,15 +346,22 @@ class ServiceOrderSerializer(BatchSerializer):
     #   1. ticker, customer -> DB, concurrently (no dependencies)
     #   2. band             -> service, as soon as ticker is done
     #   3. exchange_ticker  -> DB again, scoped to the service's band "A"
+    # band and exchange_ticker are read-only and keyed by the row's ticker
+    # (derived_from): the one it sends, or the stored one on a PATCH.
     ticker = CachedRelatedField(lookup="isin", error="Ticker '{value}' not found.")
     customer = CachedRelatedField(lookup="isin", error="Customer '{value}' not found.")
-    band = CachedServiceField(fetch=fetch_bands, depends_on=("ticker",), read_only=True)
+    band = CachedServiceField(
+        fetch=fetch_bands,
+        derived_from="ticker",
+        depends_on=("ticker",),
+        read_only=True,
+    )
     exchange_ticker = ExchangeScopedTickerField(
         model=Ticker,
         lookup="isin",
+        derived_from="ticker",
         depends_on=("band",),
         read_only=True,
-        error="Ticker '{value}' is not listed on exchange A.",
     )
     volume = serializers.IntegerField(min_value=1)
     reference_id = serializers.CharField(max_length=64)
@@ -370,11 +379,15 @@ class ServiceOrderSerializer(BatchSerializer):
         )
 
     def validate(self, attrs):
-        # Cross-row rule that consumes the service result (zero I/O):
-        # band "B" tickers are suspended.
-        if attrs["ticker"].isin in self.collected.get("band", {}).get("B", []):
+        # Rules that consume the service results (zero I/O). self.cached()
+        # works on a PATCH that omits ticker too: attrs["ticker"] would not.
+        if self.cached("band") == "B":
             raise serializers.ValidationError(
                 {"ticker": ["Ticker is suspended on exchange B."]}
+            )
+        if self.cached("exchange_ticker") is None:
+            raise serializers.ValidationError(
+                {"exchange_ticker": ["Ticker is not listed on exchange A."]}
             )
         return attrs
 ```
@@ -384,8 +397,7 @@ curl -X POST http://localhost:8000/service-orders/batch/ \
   -H 'Content-Type: application/json' \
   -H 'Authorization: Basic ...' \
   -d '[
-    {"ticker": "1101", "customer": "112002", "band": "A",
-     "exchange_ticker": "1101", "volume": 3, "reference_id": "SVC-1"}
+    {"ticker": "1101", "customer": "112002", "volume": 3, "reference_id": "SVC-1"}
   ]'
 ```
 
@@ -401,11 +413,15 @@ curl -X POST http://localhost:8000/service-orders/batch/ \
   results.
 - A cycle (or an unknown `depends_on` name) is an `ImproperlyConfigured` at
   serializer construction.
-- Read-only cached fields are excluded from `validated_data` (so bulk create
-  is unaffected); a row may optionally supply their value, which is checked
-  against the map like any other hit/miss (a `"band": "C"` that the service
-  map does not list is a 400 row error, as is an `exchange_ticker` the scoped
-  fetch did not return).
+- Read-only cached fields never read the row and are excluded from
+  `validated_data` (so bulk create is unaffected). Their keys come from
+  `derived_from` here; a key the row did not send is never a "not found"
+  error, so `validate()` checks `self.cached(...)` itself.
+- Where a key comes from: the row's value for a writable field it sends;
+  otherwise `derived_from` (field names, each the row's value or the stored
+  one), else on `PATCH`/`PUT` the target's stored value of the field's model
+  attribute, so a service field gets a key for every row without opt-in.
+  Details: [collection guide](docs/guide/collection.md#where-a-key-comes-from).
 
 
 ## Concurrency and `depends_on`
@@ -1162,15 +1178,17 @@ Every `BatchMixin` viewset is then documented accurately:
   2. len(rows) > batch_max_size                           → 413
   3. validation (BatchListSerializer, one pass after another):
      extraction   shape + key/pk coercion per row         → 400 (no collection runs)
-     collection   update/destroy: targets = get_queryset().in_bulk(pks)
-                  (request thread); then the replacement collector, or the
-                  cached fields as one dependency graph (TaskGroup: each fetch
-                  starts when its depends_on are done) on the EVENT_LOOP loop;
-                  sync fetches on worker threads (request thread inside a
-                  transaction); nothing to fetch → no loop
-                                                          → 504 timeout, 500 error
+     targets      update/destroy: get_queryset().in_bulk(pks) (request thread)
      not found    target pk missing or out of scope       → 404
      permission   check_object_permissions(target)        → 403
+     keys         keys of the cached fields a row did not send (read_only
+                  fields never read it): derived_from, else the stored value
+     collection   the replacement collector, or the cached fields as one
+                  dependency graph (TaskGroup: each fetch starts when its
+                  depends_on are done) on the EVENT_LOOP loop; sync fetches on
+                  worker threads (request thread inside a transaction);
+                  nothing to fetch → no loop; destroy: nothing
+                                                          → 504 timeout, 500 error
      row validation  child.run_validation per row, zero I/O
                   (update: serializer.instance = target)  → 400
      conflicts    model + batch_unique_together rules, in payload and vs DB

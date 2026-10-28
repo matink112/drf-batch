@@ -420,8 +420,14 @@ def test_two_fields_sharing_a_map_do_one_union_fetch(tickers, customers):
 
     class S(OrderSerializer):
         ticker = SpyTicker(lookup="isin", error="Ticker '{value}' not found.")
+        # Read-only: its key is derived (here from reference_id), not read
+        # from the row.
         ticker_alt = CachedRelatedField(
-            lookup="isin", model=Ticker, map="ticker", read_only=True
+            lookup="isin",
+            model=Ticker,
+            map="ticker",
+            read_only=True,
+            derived_from="reference_id",
         )
 
         class Meta:
@@ -438,10 +444,10 @@ def test_two_fields_sharing_a_map_do_one_union_fetch(tickers, customers):
     rows = [
         {
             "ticker": "1101",
-            "ticker_alt": "1102",
+            "ticker_alt": "ignored",
             "customer": "112001",
             "volume": 1,
-            "reference_id": "A",
+            "reference_id": "1102",
         }
     ]
     context: dict[str, Any] = {}
@@ -596,7 +602,9 @@ def test_read_only_service_field_hit_is_not_in_validated_data(tickers, customers
     assert validated["ticker"] == tickers[0]
 
 
-def test_read_only_service_field_miss_is_row_error(tickers, customers):
+def test_read_only_service_field_ignores_the_row_value(tickers, customers):
+    # read_only: the row's "band" is never read, so an unknown value is not
+    # an error; the key comes from derived_from="ticker".
     rows = [
         {
             "ticker": "1101",
@@ -606,17 +614,17 @@ def test_read_only_service_field_miss_is_row_error(tickers, customers):
             "band": "X",
         }
     ]
+    context: dict[str, Any] = {}
     serializer = BatchListSerializer(
-        child=ServiceOrderSerializer(context={}), data=rows, context={}
+        child=ServiceOrderSerializer(context=context), data=rows, context=context
     )
 
-    assert serializer.is_valid() is False
-    assert serializer.errors == [{"band": ["Object 'X' not found."]}]
+    assert serializer.is_valid(), serializer.errors
+    assert context["collected"]["band"] == {"1101": "A"}
 
 
-def test_read_only_row_without_a_key_is_fine(tickers, customers):
-    # No "band" in the row: no key, no check against the map. The service
-    # fetch still runs (its map is derived from collected["ticker"]).
+def test_read_only_row_without_a_value_is_keyed_by_derivation(tickers, customers):
+    # No "band" in the row: the key is the row's ticker (derived_from).
     rows = [{"ticker": "1101", "customer": "112001", "volume": 1, "reference_id": "A"}]
     context: dict[str, Any] = {}
     serializer = BatchListSerializer(
@@ -625,7 +633,7 @@ def test_read_only_row_without_a_key_is_fine(tickers, customers):
 
     assert serializer.is_valid()
     assert serializer.validated_data[0]["ticker"] == tickers[0]
-    assert context["collected"]["band"] == {"A": ["1101"]}
+    assert context["collected"]["band"] == {"1101": "A"}
 
 
 def test_service_fetch_runs_without_own_keys_and_feeds_validate(tickers, customers):
@@ -639,21 +647,21 @@ def test_service_fetch_runs_without_own_keys_and_feeds_validate(tickers, custome
 
     assert serializer.is_valid() is False
     assert serializer.errors == [{"ticker": ["Ticker is suspended on exchange B."]}]
-    assert context["collected"]["band"] == {"B": ["1102"]}
+    assert context["collected"]["band"] == {"1102": "B"}
 
 
 def test_db_after_service_scoped_fetch_miss(tickers, customers):
-    # Band 'A' hit (ticker 1101 is collected), but the row asserts an
-    # exchange_ticker of 1102, which the scoped DB fetch (band-'A' only)
-    # cannot resolve.
+    # Ticker 1103 has no band, so the scoped DB fetch (band-'A' only) does
+    # not return it. A derived key's miss is no row error by itself:
+    # validate() rejects it via self.cached().
+    Ticker.objects.create(isin="1103", name="Gamma Corp")
     rows = [
         {
-            "ticker": "1101",
+            "ticker": "1103",
             "customer": "112001",
             "volume": 1,
             "reference_id": "A",
-            "band": "A",
-            "exchange_ticker": "1102",
+            "exchange_ticker": "1101",  # read-only: ignored
         }
     ]
     serializer = BatchListSerializer(
@@ -662,7 +670,7 @@ def test_db_after_service_scoped_fetch_miss(tickers, customers):
 
     assert serializer.is_valid() is False
     assert serializer.errors == [
-        {"exchange_ticker": ["Ticker '1102' is not listed on exchange A."]}
+        {"exchange_ticker": ["Ticker is not listed on exchange A."]}
     ]
 
 
