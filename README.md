@@ -234,7 +234,9 @@ class TradableTickerField(CachedRelatedField):
 
     def fetch(self, keys, collected, context):
         bands = collected.get("band", {})
-        return super().fetch({isin for isin in keys if isin in bands}, collected, context)
+        return super().fetch(
+            {isin for isin in keys if isin in bands}, collected, context
+        )
 
 
 class CreditLimitField(CachedServiceField):

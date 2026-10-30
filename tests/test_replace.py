@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from drf_batch import BatchListSerializer
 from tests.apps.demo.models import Order
 from tests.apps.demo.serializers import OrderSerializer
 
@@ -136,9 +137,10 @@ class TestStandalone:
     def test_partial_false_enforces_required_fields(self, tickers, customers):
         o1, _ = create_orders(tickers, customers)
 
-        serializer = OrderSerializer(
+        serializer = BatchListSerializer(
+            child=OrderSerializer(context={}),
             data=[{"id": o1.pk, "volume": 7}],
-            many=True,
+            context={},
             operation="update",
             partial=False,
         )
@@ -149,8 +151,11 @@ class TestStandalone:
     def test_update_is_partial_by_default(self, tickers, customers):
         o1, _ = create_orders(tickers, customers)
 
-        serializer = OrderSerializer(
-            data=[{"id": o1.pk, "volume": 7}], many=True, operation="update"
+        serializer = BatchListSerializer(
+            child=OrderSerializer(context={}),
+            data=[{"id": o1.pk, "volume": 7}],
+            context={},
+            operation="update",
         )
 
         assert serializer.is_valid(), serializer.errors
