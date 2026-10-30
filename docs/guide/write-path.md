@@ -46,7 +46,6 @@ only `id` is a valid no-op (counted, nothing written).
 ```bash
 curl -X PATCH http://localhost:8000/orders/batch/ \
   -H 'Content-Type: application/json' \
-  -H 'Authorization: Basic ...' \
   -d '[
     {"id": 1, "volume": 50}
   ]'
@@ -96,7 +95,6 @@ is a 400 "expected a pk value"):
 ```bash
 curl -X DELETE http://localhost:8000/orders/batch/ \
   -H 'Content-Type: application/json' \
-  -H 'Authorization: Basic ...' \
   -d '[1, 2]'
 ```
 

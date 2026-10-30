@@ -77,7 +77,6 @@ include = [
     "README.md",
     "CHANGELOG.md",
     "LICENSE",
-    "SECURITY.md",
     "pyproject.toml",
 ]
 
@@ -111,7 +110,6 @@ ignore = ["ANN401"]
 "tests/**" = ["ANN"]
 "tests/apps/demo/migrations/**" = ["E501", "RUF012"]
 "tests/apps/demo/**" = ["RUF012"]
-"scripts/quickstart/**" = ["RUF012"]
 
 [tool.django-stubs]
 django_settings_module = "tests.apps.demo.settings"

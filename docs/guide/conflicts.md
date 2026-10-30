@@ -13,9 +13,16 @@ per-row query or a 500 at commit time. Rules come from two places:
 2. **Explicitly**, for rules the model does not declare:
 
 ```python
+# quickstart_app/models.py: give Order a client-supplied reference
+class Order(models.Model):
+    ...
+    reference_id = models.CharField(max_length=64)
+
+
 # quickstart_app/serializers.py
 class ConflictOrderSerializer(OrderSerializer):
     class Meta(OrderSerializer.Meta):
+        fields = (*OrderSerializer.Meta.fields, "reference_id")
         # one rule per tuple entry: a single field name, or a composite
         # (tuple of field names). Every name must be a concrete field, an
         # FK, or the pk on Meta.model (ImproperlyConfigured otherwise).
@@ -25,7 +32,6 @@ class ConflictOrderSerializer(OrderSerializer):
 ```bash
 curl -X POST http://localhost:8000/conflict-orders/batch/ \
   -H 'Content-Type: application/json' \
-  -H 'Authorization: Basic ...' \
   -d '[
     {"ticker": "1101", "customer": "112002", "volume": 1, "reference_id": "DUP"},
     {"ticker": "1102", "customer": "112003", "volume": 2, "reference_id": "DUP"}

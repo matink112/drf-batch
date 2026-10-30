@@ -119,17 +119,17 @@ from .models import Order, Ticker
 
 # A mocked third-party "exchange listing" service — in a real app the fetch
 # would be an HTTP/gRPC call; a dict plays the external system.
-_LISTINGS = {"Alpha Corp": "A", "Beta Corp": "B"}  # ticker name -> band
+_LISTINGS = {"1101": "A", "1102": "B"}  # ticker ISIN -> band
 
 
 def fetch_bands(keys, collected, context):
-    # Service-after-DB: {isin: band} for the rows' tickers, read from the
-    # ticker query.
+    # Service-after-DB: {isin: band}, only for the tickers the ticker query
+    # found.
     tickers = collected.get("ticker", {})
     return {
-        isin: _LISTINGS[tickers[isin].name]
+        isin: _LISTINGS[isin]
         for isin in keys
-        if isin in tickers and tickers[isin].name in _LISTINGS
+        if isin in tickers and isin in _LISTINGS
     }
 
 
@@ -164,19 +164,10 @@ class ServiceOrderSerializer(BatchSerializer):
         read_only=True,
     )
     volume = serializers.IntegerField(min_value=1)
-    reference_id = serializers.CharField(max_length=64)
 
     class Meta:
         model = Order
-        fields = (
-            "id",
-            "ticker",
-            "customer",
-            "band",
-            "exchange_ticker",
-            "volume",
-            "reference_id",
-        )
+        fields = ("id", "ticker", "customer", "band", "exchange_ticker", "volume")
 
     def validate(self, attrs):
         # Rules that consume the service results (zero I/O). self.cached()
@@ -195,9 +186,8 @@ class ServiceOrderSerializer(BatchSerializer):
 ```bash
 curl -X POST http://localhost:8000/service-orders/batch/ \
   -H 'Content-Type: application/json' \
-  -H 'Authorization: Basic ...' \
   -d '[
-    {"ticker": "1101", "customer": "112002", "volume": 3, "reference_id": "SVC-1"}
+    {"ticker": "1101", "customer": "112001", "volume": 3}
   ]'
 ```
 
@@ -232,8 +222,8 @@ Each row gets a key for every cached field, in this order:
 **The stored value** is read from the update target, from the model field the
 cached field maps to (its `source`):
 
-- a column: its value (`reference_id = CachedServiceField(...)` on a `PATCH`
-  without `reference_id` fetches the stored `reference_id`);
+- a column: its value (`volume = CachedServiceField(...)` on a `PATCH`
+  without `volume` fetches the stored `volume`);
 - a ForeignKey / OneToOneField on a `CachedServiceField`: the FK column
   (`customer_id`);
 - a `CachedRelatedField`: the stored object's lookup value. A `pk` lookup reads

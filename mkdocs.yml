@@ -50,7 +50,6 @@ nav:
   - Project:
       - Changelog: changelog.md
       - Contributing: contributing.md
-      - Security: security.md
       - Provenance: PROVENANCE.md
 
 markdown_extensions:

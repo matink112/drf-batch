@@ -347,8 +347,7 @@ make help        # every other shortcut
 ```
 
 Commits follow [Conventional Commits](https://www.conventionalcommits.org/).
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow and
-[SECURITY.md](SECURITY.md) for reporting vulnerabilities.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow.
 
 **Running `drf-batch` in production?** Please
 [open an issue](https://github.com/matink112/drf-batch/issues) and tell us

@@ -13,26 +13,16 @@ from django.db import models
 
 class Ticker(models.Model):
     isin = models.CharField(max_length=32, unique=True)
-    name = models.CharField(max_length=256)
 
 
 class Customer(models.Model):
     isin = models.CharField(max_length=32, unique=True)
-    name = models.CharField(max_length=256)
 
 
 class Order(models.Model):
     ticker = models.ForeignKey(Ticker, on_delete=models.CASCADE)
     customer = models.ForeignKey(Customer, on_delete=models.CASCADE)
-    volume = models.PositiveIntegerField()
-    reference_id = models.CharField(max_length=64)
-
-    class Meta:
-        constraints = [
-            models.UniqueConstraint(
-                fields=["ticker", "customer"], name="unique_ticker_customer"
-            ),
-        ]
+    volume = models.IntegerField()
 ```
 
 ## 2. Serializer — declare the cached fields, nothing else
@@ -49,11 +39,10 @@ class OrderSerializer(BatchSerializer):
     ticker = CachedRelatedField(lookup="isin", error="Ticker '{value}' not found.")
     customer = CachedRelatedField(lookup="isin", error="Customer '{value}' not found.")
     volume = serializers.IntegerField(min_value=1)
-    reference_id = serializers.CharField(max_length=64)
 
     class Meta:
         model = Order
-        fields = ("id", "ticker", "customer", "volume", "reference_id")
+        fields = ("id", "ticker", "customer", "volume")
 ```
 
 **No collector class is needed.** The list serializer auto-collects: it
@@ -69,31 +58,26 @@ A hit returns the **model instance**, so `create()` receives an FK instance
 and your own `validate()` can inspect it (`data["ticker"].isin`) without
 touching the database.
 
-
 Like DRF's `RelatedField`, a `CachedRelatedField` can be scoped so a client
 cannot reference rows it may not see: pass `queryset=` or override
 `get_queryset()` (`self.context["request"]` is available). The same field
 renders the lookup value (`"1101"`) on the read path, so one serializer can
 serve `list`/`retrieve` and the batch route.
 
-## 3. View and URLs
+## 3. ViewSet and URLs
 
 ```python
 # quickstart_app/views.py
 from drf_batch import BatchMixin
-from rest_framework.authentication import BasicAuthentication, SessionAuthentication
-from rest_framework.permissions import IsAuthenticated
-from rest_framework.viewsets import GenericViewSet
+from rest_framework.viewsets import ModelViewSet
 
 from .models import Order
 from .serializers import OrderSerializer
 
 
-class OrderViewSet(BatchMixin, GenericViewSet):
+class OrderViewSet(BatchMixin, ModelViewSet):
     queryset = Order.objects.all()
-    batch_serializer_class = OrderSerializer
-    authentication_classes = [BasicAuthentication, SessionAuthentication]
-    permission_classes = [IsAuthenticated]
+    serializer_class = OrderSerializer
 ```
 
 ```python
@@ -120,20 +104,25 @@ DRF actions:
 
 The distinct action names mean `get_permissions()`, `get_throttles()` and
 `ScopedRateThrottle` can treat them differently, as with any other action.
-Other methods on the route return `405`. The mixin also works next to DRF's
-own mixins (`ModelViewSet`, `ReadOnlyModelViewSet`, …). Setting
-`serializer_class = OrderSerializer` instead of `batch_serializer_class`
-serves both the read path and the batch route.
+Other methods on the route return `405`. The usual single-item routes
+(`/orders/`, `/orders/<pk>/`) come from `ModelViewSet` and use the same
+`OrderSerializer`. The mixin also works with `GenericViewSet` or
+`ReadOnlyModelViewSet`. To give the batch route its own serializer, set
+`batch_serializer_class`; it falls back to `serializer_class`.
+
+The example uses the project's default permission classes (`AllowAny`
+unless `DEFAULT_PERMISSION_CLASSES` says otherwise). Set
+`permission_classes` as on any viewset; [Permissions and
+scoping](guide/permissions.md) covers how batch rows are checked.
 
 ## 4. Call it
 
 ```bash
 curl -X POST http://localhost:8000/orders/batch/ \
   -H 'Content-Type: application/json' \
-  -H 'Authorization: Basic ...' \
   -d '[
-    {"ticker": "1101", "customer": "112001", "volume": 10, "reference_id": "REF-1"},
-    {"ticker": 1102,   "customer": "112001", "volume": 5,  "reference_id": "REF-2"}
+    {"ticker": "1101", "customer": "112001", "volume": 10},
+    {"ticker": 1102,   "customer": "112001", "volume": 5}
   ]'
 ```
 

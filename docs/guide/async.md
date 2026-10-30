@@ -18,11 +18,10 @@ class OrderSerializer(BatchSerializer):
     customer = CachedRelatedField(lookup="isin", error="Customer '{value}' not found.")
     band = CachedServiceField(fetch=fetch_bands, depends_on=("ticker",), read_only=True)
     volume = serializers.IntegerField(min_value=1)
-    reference_id = serializers.CharField(max_length=64)
 
     class Meta:
         model = Order
-        fields = ("id", "ticker", "customer", "band", "volume", "reference_id")
+        fields = ("id", "ticker", "customer", "band", "volume")
 ```
 
 Sync and async fetches run together as one dependency graph on an event loop
@@ -272,10 +271,8 @@ call) runs depends on the request's connection:
 # Inside a transaction a worker thread could not see this row; the
 # request thread runs the sync ticker fetch, so the batch resolves it.
 with transaction.atomic():
-    Ticker.objects.create(isin="1103", name="Gamma Corp")
-    rows = [
-        {"ticker": "1103", "customer": "112001", "volume": 1, "reference_id": "TX-1"}
-    ]
+    Ticker.objects.create(isin="1103")
+    rows = [{"ticker": "1103", "customer": "112001", "volume": 1}]
     serializer = OrderSerializer(data=rows, many=True)
     serializer.is_valid(raise_exception=True)
 ```
