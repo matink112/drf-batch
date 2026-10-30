@@ -9,7 +9,7 @@ license-files = ["LICENSE"]
 authors = [{ name = "matin" }]
 keywords = ["django", "djangorestframework", "batch", "bulk", "validation"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Framework :: Django",
     "Framework :: Django :: 5.2",
     "Framework :: Django :: 6.0",

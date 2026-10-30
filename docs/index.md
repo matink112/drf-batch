@@ -12,6 +12,14 @@ POST /orders/batch/   →   201 {"count": 2}
 POST /orders/batch/   →   400 [{}, {"ticker": ["Ticker 'XYZ' not found."]}]
 ```
 
+!!! success "Extracted from production"
+    `drf-batch` comes from the trading backend of a large fintech company,
+    where its author designed and built it to validate and commit
+    high-volume batches of orders against customers, instruments and live
+    risk services. This package is the generalized, open-source release of
+    that mechanism, with the domain logic removed
+    ([provenance](PROVENANCE.md)).
+
 ## Highlights
 
 ```text
@@ -92,3 +100,13 @@ pip install "drf-batch[spectacular]"   # with OpenAPI support
 
 Next: the [Quickstart](quickstart.md), then the [cookbook](https://github.com/matink112/drf-batch-cookbook) for a
 runnable scenario per option.
+
+## Contributing
+
+Contributions are welcome: cookbook recipes from your own domain, bug reports
+with a failing test, docs, benchmarks and integrations. Start with the
+[contributing guide](contributing.md), and find the source and issue tracker
+on [GitHub](https://github.com/matink112/drf-batch). If you run `drf-batch` in
+production, please
+[open an issue](https://github.com/matink112/drf-batch/issues) and tell us
+about it.
