@@ -50,7 +50,7 @@ class FlakyRetryPolicy(FixedRetryPolicy):
 
 
 class OrderViewSet(BatchMixin, GenericViewSet):
-    """Auto collection: the serializer's cached fields fetch their own lookups."""
+    """Auto collection: the serializer's batch fields fetch their own lookups."""
 
     queryset = Order.objects.all()
     batch_serializer_class: type[BatchSerializer] | None = OrderSerializer
@@ -62,7 +62,7 @@ class OrderViewSet(BatchMixin, GenericViewSet):
 
 
 class RawOrderViewSet(BatchMixin, GenericViewSet):
-    """Batch create with no cached fields: ``collected`` stays ``{}``."""
+    """Batch create with no batch fields: ``collected`` stays ``{}``."""
 
     queryset = Order.objects.all()
     batch_serializer_class: type[BatchSerializer] | None = RawOrderSerializer

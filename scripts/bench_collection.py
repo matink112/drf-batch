@@ -1,6 +1,6 @@
 """Benchmark collection latency with and without a surrounding transaction.
 
-Builds batch serializers with N sync cached fields; each fetch runs one ORM
+Builds batch serializers with N sync batch fields; each fetch runs one ORM
 query and then sleeps for a simulated round-trip (``--latency`` ms, standing
 in for a remote database or a sync service client). Each case is timed for
 ``is_valid()`` (collection + validation, no write):
@@ -56,7 +56,7 @@ def _make_serializer(n_fields: int, latency: float) -> type:
     from rest_framework import serializers
     from tests.apps.demo.models import Ticker
 
-    from drf_batch import BatchSerializer, CachedServiceField
+    from drf_batch import BatchSerializer, BatchServiceField
 
     def fetch(keys: set[str], collected: dict, context: dict) -> dict[str, str]:
         rows = Ticker.objects.filter(isin__in=keys).values_list("isin", "name")
@@ -69,7 +69,7 @@ def _make_serializer(n_fields: int, latency: float) -> type:
         "name": serializers.CharField(),
     }
     for i in range(n_fields):
-        attrs[f"f{i}"] = CachedServiceField(fetch=fetch, read_only=True)
+        attrs[f"f{i}"] = BatchServiceField(fetch=fetch, read_only=True)
     meta = {"model": Ticker, "fields": tuple(attrs)}
     attrs["Meta"] = type("Meta", (), meta)
     return type(f"Bench{n_fields}Serializer", (BatchSerializer,), attrs)

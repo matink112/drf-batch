@@ -1,21 +1,21 @@
 """Collection fields: resolve a row value against the request's collected maps.
 
 Collection is **serializer-driven** (v0.3): a ``BatchSerializer`` declares
-which of its fields are *cached*, and the list serializer auto-collects the
+which of its fields are *batch fields*, and the list serializer auto-collects the
 needed lookups before any row is validated — the common case needs no
 collector class at all.
 
-- :class:`CachedField` is the base: it owns the map name, the miss/error
+- :class:`BatchField` is the base: it owns the map name, the miss/error
   templates, ``prepare_key`` (row value -> lookup key) and the ``collected``
-  lookup; subclasses provide :meth:`CachedField.fetch`.
-- :class:`CachedRelatedField` auto-derives its model from the same-named
+  lookup; subclasses provide :meth:`BatchField.fetch`.
+- :class:`BatchRelatedField` auto-derives its model from the same-named
   ForeignKey on ``Meta.model`` (explicit ``model=`` for non-FK lookups) and
   coerces row values to the lookup field's type.
-- :class:`CachedServiceField` fetches the map with a user callable
+- :class:`BatchServiceField` fetches the map with a user callable
   (sync or ``async def``).
 
-Where a row's key comes from (see :meth:`CachedField.stored_key_path` and
-:meth:`CachedField.derived_key`): a writable field the row sends uses the
+Where a row's key comes from (see :meth:`BatchField.stored_key_path` and
+:meth:`BatchField.derived_key`): a writable field the row sends uses the
 row's value; ``read_only`` fields never read the row. Otherwise the key is
 **derived** from other fields (``derived_from=``) or, on update, read from
 the **stored** row. Only a key the row sent can be a "not found" error.
@@ -76,7 +76,7 @@ def _model_field(model: type[models.Model], attribute: str | None) -> Any:
         return None
 
 
-class CachedField(serializers.Field):
+class BatchField(serializers.Field):
     """Base class for fields resolved against the request's collected maps.
 
     :param map: key into the request's ``collected`` maps; defaults to the
@@ -84,7 +84,7 @@ class CachedField(serializers.Field):
     :param error: optional template for the miss message; ``{value}`` is
         replaced with the offending (coerced) value. Defaults to
         ``"Object '{value}' not found."``.
-    :param depends_on: names of other cached fields whose fetches must
+    :param depends_on: names of other batch fields whose fetches must
         finish first. Fetches without a dependency between them run
         concurrently; every fetch receives a snapshot of the maps collected
         so far, which always includes its ``depends_on`` maps.
@@ -92,7 +92,7 @@ class CachedField(serializers.Field):
         from when the row does not send this field (always, for a
         ``read_only`` field). Each name is a serializer field (the row's
         value, else the stored value on update) or a model field (the stored
-        value); a cached field gives its own key for the row.
+        value); a batch field gives its own key for the row.
     :param key: builds the key from the ``derived_from`` values (passed
         positionally, ``None`` included); return ``None`` for no key. The
         default is the value for one name, a tuple for several, and no key
@@ -157,7 +157,7 @@ class CachedField(serializers.Field):
 
         A database lookup is one (``in_bulk(set())`` is empty, so the query
         is skipped); a service fetch may build its map from the other
-        collected maps, so :class:`CachedServiceField` keeps it running.
+        collected maps, so :class:`BatchServiceField` keeps it running.
         """
         return True
 
@@ -266,7 +266,7 @@ class CachedField(serializers.Field):
         return entry[1].get(id(value), value)
 
     def get_attribute(self, instance: Any) -> Any:
-        # A read-only cached field whose name is not a model attribute
+        # A read-only batch field whose name is not a model attribute
         # (e.g. a service field) has nothing to read on output.
         try:
             return super().get_attribute(instance)
@@ -390,7 +390,7 @@ def _coerce_lookup_key(value: Any, lookup: models.Field) -> tuple[Any, str | Non
     return value, None
 
 
-class CachedRelatedField(CachedField):
+class BatchRelatedField(BatchField):
     """A relation field auto-collected from the database.
 
     The model is auto-derived from the ForeignKey (or OneToOneField) on
@@ -414,11 +414,11 @@ class CachedRelatedField(CachedField):
     :param lookup: field on the lookup model to match against; defaults to
         ``"pk"``.
     :param error: miss-message template (``{value}`` = coerced value).
-    :param depends_on: cached fields that must be fetched first.
-    :param derived_from: see :class:`CachedField` (also ``key``).
+    :param depends_on: batch fields that must be fetched first.
+    :param derived_from: see :class:`BatchField` (also ``key``).
 
     On update, a row that omits a writable related field contributes the
-    target's stored key only when another cached field reads this one
+    target's stored key only when another batch field reads this one
     (``derived_from`` or ``depends_on``); nothing else needs it.
     """
 
@@ -461,7 +461,7 @@ class CachedRelatedField(CachedField):
         )
         if model is None:
             raise ImproperlyConfigured(
-                f"CachedRelatedField '{self.field_name}': the parent "
+                f"BatchRelatedField '{self.field_name}': the parent "
                 "serializer has no Meta.model; pass model= explicitly."
             )
         attribute = _source_attribute(self)
@@ -473,7 +473,7 @@ class CachedRelatedField(CachedField):
             self._model = model_field.related_model
             return self._model
         raise ImproperlyConfigured(
-            f"CachedRelatedField '{self.field_name}': "
+            f"BatchRelatedField '{self.field_name}': "
             f"{model.__name__}.{attribute} is not a ForeignKey or "
             "OneToOneField; pass model= explicitly for non-FK lookups."
         )
@@ -488,7 +488,7 @@ class CachedRelatedField(CachedField):
                     self._lookup_field = model._meta.get_field(self.lookup)
                 except FieldDoesNotExist:
                     raise ImproperlyConfigured(
-                        f"CachedRelatedField '{self.field_name}': "
+                        f"BatchRelatedField '{self.field_name}': "
                         f"{model.__name__} has no field '{self.lookup}'."
                     ) from None
         return self._lookup_field
@@ -548,16 +548,16 @@ class CachedRelatedField(CachedField):
         return value
 
 
-class CachedServiceField(CachedField):
-    """A cached field whose map comes from a user ``fetch`` callable.
+class BatchServiceField(BatchField):
+    """A batch field whose map comes from a user ``fetch`` callable.
 
     :param map: key into the collected maps; defaults to the field name.
     :param fetch: a sync or ``async def`` callable
         ``(keys, collected, context) -> dict``, or ``None`` when a subclass
         overrides :meth:`fetch`.
     :param error: miss-message template (``{value}`` = coerced value).
-    :param depends_on: cached fields that must be fetched first.
-    :param derived_from: see :class:`CachedField` (also ``key``).
+    :param depends_on: batch fields that must be fetched first.
+    :param derived_from: see :class:`BatchField` (also ``key``).
 
     On update, a row that omits the field contributes the target's stored
     value of the field's model attribute (column, or FK column), so the
@@ -583,14 +583,14 @@ class CachedServiceField(CachedField):
         key: Callable[..., Any] | None = None,
         **kwargs: Any,
     ) -> None:
-        if fetch is None and type(self).fetch is CachedServiceField.fetch:
+        if fetch is None and type(self).fetch is BatchServiceField.fetch:
             raise TypeError(
-                "CachedServiceField: pass a fetch callable "
+                "BatchServiceField: pass a fetch callable "
                 "(or override fetch() in a subclass)."
             )
         if fetch is not None and not callable(fetch):
             raise TypeError(
-                f"CachedServiceField: fetch must be callable, "
+                f"BatchServiceField: fetch must be callable, "
                 f"got {type(fetch).__name__}."
             )
         self._fetch = fetch

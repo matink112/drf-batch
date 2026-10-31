@@ -10,8 +10,8 @@ installed):
   pk; destroy pks), the success body
   (``{"count": N}`` or the data, per ``batch_response``) and the
   index-aligned 400/403/404/409 bodies plus 413/504;
-- a field extension that types cached fields by their lookup field
-  (``CachedRelatedField(lookup="isin")`` is a string, a pk lookup an
+- a field extension that types batch fields by their lookup field
+  (``BatchRelatedField(lookup="isin")`` is a string, a pk lookup an
   integer/UUID, ...).
 
 The schema is derived from the class attributes (``batch_serializer_class``
@@ -35,7 +35,7 @@ from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework import serializers
 
-from drf_batch.fields import CachedField, CachedRelatedField
+from drf_batch.fields import BatchField, BatchRelatedField
 
 _ROW_ERRORS = {
     "type": "array",
@@ -229,17 +229,17 @@ class BatchMixinViewExtension(OpenApiViewExtension):
         return replacement
 
 
-class CachedFieldExtension(OpenApiSerializerFieldExtension):
-    target_class = "drf_batch.fields.CachedField"
+class BatchFieldExtension(OpenApiSerializerFieldExtension):
+    target_class = "drf_batch.fields.BatchField"
     match_subclasses = True
 
     def map_serializer_field(self, auto_schema: Any, direction: Any) -> Any:
-        field: CachedField = self.target
-        if isinstance(field, CachedRelatedField):
+        field: BatchField = self.target
+        if isinstance(field, BatchRelatedField):
             schema = dict(
                 auto_schema._map_model_field(field._resolve_lookup_field(), direction)
             )
-            # The lookup column may be non-editable (an auto pk); the cached
+            # The lookup column may be non-editable (an auto pk); the batch
             # field itself is writable unless declared read-only.
             schema.pop("readOnly", None)
             return schema

@@ -1,8 +1,8 @@
 """Serializers for batch payloads.
 
 ``BatchSerializer`` is the per-row serializer; it exposes the request's
-collected maps as ``self.collected`` and the declared cached fields
-(:meth:`BatchSerializer.get_cached_fields`). ``BatchSerializer(many=True)``
+collected maps as ``self.collected`` and the declared batch fields
+(:meth:`BatchSerializer.get_batch_fields`). ``BatchSerializer(many=True)``
 builds a :class:`BatchListSerializer`, as DRF's ``many=True`` convention
 expects.
 
@@ -31,7 +31,7 @@ from rest_framework import serializers
 from drf_batch.collectors import BatchContext
 from drf_batch.config import BatchConfig, BatchOperation
 from drf_batch.conflicts import resolve_conflict_rules, strip_owned_unique_validators
-from drf_batch.fields import NO_KEY, CachedField
+from drf_batch.fields import NO_KEY, BatchField
 from drf_batch.pipeline import PipelineContext, build_collection_plan, build_pipeline
 from drf_batch.writers import check_bulk_fields, make_writer
 
@@ -45,11 +45,11 @@ class BatchSerializer(serializers.ModelSerializer):
     """Per-row serializer for batch payloads.
 
     The maps produced by the request's collection (auto-collected from the
-    declared cached fields, or returned by a replacement
+    declared batch fields, or returned by a replacement
     :class:`~drf_batch.collectors.BatchCollector`) are available as
     ``self.collected`` (a plain dict; ``{}`` when nothing was collected), so
-    cached fields and user ``validate()`` methods can resolve lookups with
-    zero I/O. :meth:`cached` returns one cached field's value for the row
+    batch fields and user ``validate()`` methods can resolve lookups with
+    zero I/O. :meth:`fetched` returns one batch field's value for the row
     being validated, including fields the row did not send (``read_only``,
     derived or stored keys).
 
@@ -63,8 +63,8 @@ class BatchSerializer(serializers.ModelSerializer):
       ``UniqueConstraint``s (replacing DRF's per-row unique validators).
     """
 
-    # {cached field name: key} of the row being validated, set by the
-    # pipeline around each row's validation (read by :meth:`cached`).
+    # {batch field name: key} of the row being validated, set by the
+    # pipeline around each row's validation (read by :meth:`fetched`).
     _batch_row_keys: dict[str, Any] | None = None
 
     @classmethod
@@ -98,8 +98,8 @@ class BatchSerializer(serializers.ModelSerializer):
         collected = self.context.get("collected")
         return collected if isinstance(collected, dict) else {}
 
-    def cached(self, name: str) -> Any:
-        """The collected value of cached field ``name`` for the current row.
+    def fetched(self, name: str) -> Any:
+        """The collected value of batch field ``name`` for the current row.
 
         For ``validate()`` / ``validate_<field>()``. The key is the one the
         row sent, else the field's derived (``derived_from``) or stored
@@ -107,22 +107,22 @@ class BatchSerializer(serializers.ModelSerializer):
         fetch did not return it, or outside batch validation. A key the row
         did not send is never a "not found" error: check for ``None`` here.
 
-        A writable :class:`~drf_batch.CachedRelatedField` the row omits has
-        a stored key only when another cached field reads it
+        A writable :class:`~drf_batch.BatchRelatedField` the row omits has
+        a stored key only when another batch field reads it
         (``derived_from`` / ``depends_on``); use ``self.instance`` otherwise.
         """
         field = self.fields.get(name)
-        if not isinstance(field, CachedField):
-            raise KeyError(f"'{name}' is not a cached field of {type(self).__name__}.")
+        if not isinstance(field, BatchField):
+            raise KeyError(f"'{name}' is not a batch field of {type(self).__name__}.")
         key = (self._batch_row_keys or {}).get(name, NO_KEY)
         if key is NO_KEY:
             return None
         mapping = self.collected.get(field.map)
         return mapping.get(key) if isinstance(mapping, dict) else None
 
-    def get_cached_fields(self) -> list[CachedField]:
-        """All declared :class:`CachedField` instances, in field order."""
-        return [f for f in self.fields.values() if isinstance(f, CachedField)]
+    def get_batch_fields(self) -> list[BatchField]:
+        """All declared :class:`BatchField` instances, in field order."""
+        return [f for f in self.fields.values() if isinstance(f, BatchField)]
 
 
 _CONFIG_FIELDS = tuple(f.name for f in dataclasses.fields(BatchConfig))

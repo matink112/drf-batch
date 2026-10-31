@@ -9,7 +9,7 @@ from django.core.exceptions import ImproperlyConfigured
 from django.db import models
 from rest_framework.exceptions import ValidationError
 
-from drf_batch import BatchSerializer, CachedRelatedField, CachedServiceField
+from drf_batch import BatchRelatedField, BatchSerializer, BatchServiceField
 from drf_batch.fields import NO_KEY
 from tests.apps.demo.models import Customer, Order, Symbol, Ticker
 
@@ -73,7 +73,7 @@ def test_missing_map_key_in_collected_is_a_miss_not_a_keyerror(tickers, customer
 
 def test_default_error_template_when_no_error_kwarg():
     class ThingSerializer(BatchSerializer):
-        thing = CachedRelatedField(model=Ticker, lookup="isin")
+        thing = BatchRelatedField(model=Ticker, lookup="isin")
 
         class Meta:
             model = Order
@@ -123,15 +123,15 @@ class _Probe(models.Model):
 
 
 class ProbeSerializer(BatchSerializer):
-    by_text = CachedRelatedField(model=_Probe, lookup="text")
-    by_slug = CachedRelatedField(model=_Probe, lookup="slug")
-    by_number = CachedRelatedField(model=_Probe, lookup="number")
-    by_flag = CachedRelatedField(model=_Probe, lookup="flag")
-    by_ratio = CachedRelatedField(model=_Probe, lookup="ratio")
-    by_amount = CachedRelatedField(model=_Probe, lookup="amount")
-    by_stamp = CachedRelatedField(model=_Probe, lookup="stamp")
-    by_pk = CachedRelatedField(model=Ticker, lookup="pk")
-    by_symbol_pk = CachedRelatedField(model=Symbol, lookup="pk")
+    by_text = BatchRelatedField(model=_Probe, lookup="text")
+    by_slug = BatchRelatedField(model=_Probe, lookup="slug")
+    by_number = BatchRelatedField(model=_Probe, lookup="number")
+    by_flag = BatchRelatedField(model=_Probe, lookup="flag")
+    by_ratio = BatchRelatedField(model=_Probe, lookup="ratio")
+    by_amount = BatchRelatedField(model=_Probe, lookup="amount")
+    by_stamp = BatchRelatedField(model=_Probe, lookup="stamp")
+    by_pk = BatchRelatedField(model=Ticker, lookup="pk")
+    by_symbol_pk = BatchRelatedField(model=Symbol, lookup="pk")
 
     class Meta:
         model = Order
@@ -307,21 +307,21 @@ def test_map_defaults_to_field_name_after_bind(probes):
 
 def test_explicit_map_wins():
     class S(BatchSerializer):
-        thing = CachedRelatedField(model=Ticker, lookup="isin", map="tickers")
+        thing = BatchRelatedField(model=Ticker, lookup="isin", map="tickers")
 
         class Meta:
             model = Order
             fields = ("thing",)
 
     s = S()
-    assert cast("CachedRelatedField", s.fields["thing"]).map == "tickers"
+    assert cast("BatchRelatedField", s.fields["thing"]).map == "tickers"
 
 
 def test_get_attribute_attribute_error_returns_none():
-    # A writable (required) cached field whose name is not a model
+    # A writable (required) batch field whose name is not a model
     # attribute: get_attribute swallows the AttributeError on output.
     class S(BatchSerializer):
-        band = CachedServiceField(fetch=lambda keys, collected, context: {})
+        band = BatchServiceField(fetch=lambda keys, collected, context: {})
 
         class Meta:
             model = Order
@@ -331,22 +331,22 @@ def test_get_attribute_attribute_error_returns_none():
     assert s.fields["band"].get_attribute(Order()) is None
 
 
-def test_cached_related_field_resolves_model_from_same_named_fk(probes):
+def test_batch_related_field_resolves_model_from_same_named_fk(probes):
     from tests.apps.demo.serializers import OrderSerializer
 
     s = OrderSerializer()
-    assert cast("CachedRelatedField", s.fields["ticker"])._resolve_model() is Ticker
-    assert cast("CachedRelatedField", s.fields["customer"])._resolve_model() is Customer
+    assert cast("BatchRelatedField", s.fields["ticker"])._resolve_model() is Ticker
+    assert cast("BatchRelatedField", s.fields["customer"])._resolve_model() is Customer
 
 
-def test_cached_related_field_non_fk_without_model_fails_fast():
+def test_batch_related_field_non_fk_without_model_fails_fast():
     from drf_batch import BatchListSerializer
 
     class S(BatchSerializer):
-        volume = CachedRelatedField(lookup="number", model=_Probe)
+        volume = BatchRelatedField(lookup="number", model=_Probe)
         # read-only: keeps the bulk-field check out of the way so the
         # non-FK model resolution is what fails.
-        reference = CachedRelatedField(read_only=True)
+        reference = BatchRelatedField(read_only=True)
 
         class Meta:
             model = Order
@@ -358,11 +358,11 @@ def test_cached_related_field_non_fk_without_model_fails_fast():
         BatchListSerializer(child=S(context={}), data=[])
 
 
-def test_cached_related_field_unknown_lookup_fails_fast():
+def test_batch_related_field_unknown_lookup_fails_fast():
     from drf_batch import BatchListSerializer
 
     class S(BatchSerializer):
-        ticker = CachedRelatedField(lookup="nope")
+        ticker = BatchRelatedField(lookup="nope")
 
         class Meta:
             model = Order
@@ -372,24 +372,24 @@ def test_cached_related_field_unknown_lookup_fails_fast():
         BatchListSerializer(child=S(context={}), data=[])
 
 
-def test_cached_service_field_requires_callable_fetch():
+def test_batch_service_field_requires_callable_fetch():
     with pytest.raises(TypeError, match="must be callable"):
-        CachedServiceField(fetch="nope")
+        BatchServiceField(fetch="nope")
 
     with pytest.raises(TypeError, match="pass a fetch callable"):
-        CachedServiceField()
+        BatchServiceField()
 
 
-def test_cached_field_fetch_is_abstract():
-    from drf_batch.fields import CachedField
+def test_batch_field_fetch_is_abstract():
+    from drf_batch.fields import BatchField
 
     class S(BatchSerializer):
-        thing = CachedRelatedField(model=Ticker, lookup="isin")
+        thing = BatchRelatedField(model=Ticker, lookup="isin")
 
         class Meta:
             model = Order
             fields = ("thing",)
 
-    field = cast("CachedRelatedField", S().fields["thing"])
+    field = cast("BatchRelatedField", S().fields["thing"])
     with pytest.raises(NotImplementedError):
-        CachedField.fetch(field, set(), {}, {})  # base abstract method
+        BatchField.fetch(field, set(), {}, {})  # base abstract method

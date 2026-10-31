@@ -76,7 +76,7 @@ nothing else.
 
 ## What you get
 
-- **Every lookup fetched once, concurrently.** Each cached field is one query
+- **Every lookup fetched once, concurrently.** Each batch field is one query
   or one service call for the whole batch. All fetches run in one
   `asyncio.TaskGroup`: `async def` fetches run on the event loop and sync ORM
   fetches run on worker threads. Ten FK fields plus three slow services cost
@@ -86,7 +86,7 @@ nothing else.
   service result. Each fetch starts as soon as its prerequisites finish. You
   write no collector class and no ordering code. Cycles and unknown names
   fail when the serializer class is built, not in the middle of a request.
-- **Pre-query key coercion.** `CachedRelatedField` coerces raw keys to the
+- **Pre-query key coercion.** `BatchRelatedField` coerces raw keys to the
   lookup field's type (`1101` and `"1101"` both resolve). An unhashable or
   invalid key becomes a `400` on its own row instead of a `500` from the
   batch query.
@@ -146,20 +146,20 @@ class Order(models.Model):
 
 ### 2. Serializer
 
-No collector class is needed. `CachedRelatedField` reads `Order.ticker` and
+No collector class is needed. `BatchRelatedField` reads `Order.ticker` and
 `Order.customer`, deduplicates the keys across the whole payload, fetches each
 table in one query, and passes model instances to `validate()` and `create()`:
 
 ```python
-from drf_batch import BatchSerializer, CachedRelatedField
+from drf_batch import BatchSerializer, BatchRelatedField
 from rest_framework import serializers
 
 from .models import Order
 
 
 class OrderSerializer(BatchSerializer):
-    ticker = CachedRelatedField(lookup="isin", error="Ticker '{value}' not found.")
-    customer = CachedRelatedField(lookup="isin", error="Customer '{value}' not found.")
+    ticker = BatchRelatedField(lookup="isin", error="Ticker '{value}' not found.")
+    customer = BatchRelatedField(lookup="isin", error="Customer '{value}' not found.")
     volume = serializers.IntegerField(min_value=1)
 
     class Meta:
@@ -198,7 +198,7 @@ continues with updates, conflicts and permissions.
 ## External services and `depends_on`
 
 Real validation spans databases, caches and internal services. Declare
-`CachedServiceField` next to `CachedRelatedField` and wire them together in
+`BatchServiceField` next to `BatchRelatedField` and wire them together in
 either direction (DB → service or service → DB). Every fetch starts as soon
 as the fetches it depends on have finished:
 
@@ -215,13 +215,13 @@ f6 (token validation)              ██████             ← waits for 
 ```python
 import httpx
 from django.core.cache import cache
-from drf_batch import BatchSerializer, CachedRelatedField, CachedServiceField
+from drf_batch import BatchSerializer, BatchRelatedField, BatchServiceField
 from rest_framework import serializers
 
 from .models import Order
 
 
-class PriceBandField(CachedServiceField):
+class PriceBandField(BatchServiceField):
     """Service: price bands from Redis, keyed by the row's ticker ISIN."""
 
     def fetch(self, keys, collected, context):
@@ -229,7 +229,7 @@ class PriceBandField(CachedServiceField):
         return {key.removeprefix("band:"): band for key, band in raw.items()}
 
 
-class TradableTickerField(CachedRelatedField):
+class TradableTickerField(BatchRelatedField):
     """Service -> DB: only load tickers that have a price band."""
 
     def fetch(self, keys, collected, context):
@@ -239,7 +239,7 @@ class TradableTickerField(CachedRelatedField):
         )
 
 
-class CreditLimitField(CachedServiceField):
+class CreditLimitField(BatchServiceField):
     """DB -> service: one HTTP call for every known customer in the batch."""
 
     def fetch(self, keys, collected, context):
@@ -258,7 +258,7 @@ class CreditLimitField(CachedServiceField):
 
 class OrderWithRiskSerializer(BatchSerializer):
     band = PriceBandField(derived_from="ticker", read_only=True)
-    customer = CachedRelatedField(lookup="isin", error="Customer '{value}' not found.")
+    customer = BatchRelatedField(lookup="isin", error="Customer '{value}' not found.")
     ticker = TradableTickerField(
         lookup="isin",
         depends_on=("band",),
@@ -277,7 +277,7 @@ class OrderWithRiskSerializer(BatchSerializer):
 
     def validate(self, attrs):
         # Zero I/O: the limit was fetched once for the whole batch.
-        if attrs["volume"] > self.cached("credit_limit"):
+        if attrs["volume"] > self.fetched("credit_limit"):
             raise serializers.ValidationError({"volume": ["Exceeds the credit limit."]})
         return attrs
 ```
@@ -293,7 +293,7 @@ The full documentation is at **https://matink112.github.io/drf-batch/**.
 | Guide | Reference |
 |---|---|
 | [Quickstart](https://matink112.github.io/drf-batch/quickstart/) | [How it works (pipeline)](https://matink112.github.io/drf-batch/reference/pipeline/) |
-| [Collection and cached fields](https://matink112.github.io/drf-batch/guide/collection/) | [Settings and view options](https://matink112.github.io/drf-batch/reference/settings/) |
+| [Collection and batch fields](https://matink112.github.io/drf-batch/guide/collection/) | [Settings and view options](https://matink112.github.io/drf-batch/reference/settings/) |
 | [Async collection](https://matink112.github.io/drf-batch/guide/async/) | [Error contract](https://matink112.github.io/drf-batch/reference/errors/) |
 | [Permissions and scoping](https://matink112.github.io/drf-batch/guide/permissions/) | [API reference](https://matink112.github.io/drf-batch/reference/api/) |
 | [Write path](https://matink112.github.io/drf-batch/guide/write-path/) · [Conflicts](https://matink112.github.io/drf-batch/guide/conflicts/) | [Changelog](CHANGELOG.md) |
@@ -321,8 +321,8 @@ commands:
 |---|---|
 | Batch-level lookup collection (sync and async) | Vendor-specific SQL |
 | In-memory row and cross-row validation | Domain-specific business rules |
-| `CachedRelatedField` with pre-query coercion | Custom storage engines |
-| `CachedServiceField` and the `depends_on` graph | Opinionated HTTP / gRPC / Redis clients |
+| `BatchRelatedField` with pre-query coercion | Custom storage engines |
+| `BatchServiceField` and the `depends_on` graph | Opinionated HTTP / gRPC / Redis clients |
 | All-or-none `POST` / `PATCH` / `PUT` / `DELETE` | Partial commits, background queues |
 | `drf-spectacular` schema extension | Read-path (`GET`) query optimization |
 

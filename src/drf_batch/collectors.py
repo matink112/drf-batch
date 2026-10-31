@@ -1,6 +1,6 @@
 """The collector hook: full-replacement collection for a batch request.
 
-Auto collection is the default: the serializer's cached fields are
+Auto collection is the default: the serializer's batch fields are
 fetched by the list serializer itself, as a dependency graph. A
 :class:`BatchCollector` is a **full-replacement hook**: when
 ``batch_collector_class`` is set, its ``collect(keys, context)`` runs
@@ -8,7 +8,7 @@ fetched by the list serializer itself, as a dependency graph. A
 (a missing map means every row gets a miss error for it).
 
 ``collect`` receives the coerced key sets derived from the serializer's
-cached fields (``{map: set}``; keys are the type-coerced lookup keys, never
+batch fields (``{map: set}``; keys are the type-coerced lookup keys, never
 raw rows), so a collector can no longer crash on malformed data.
 
 ``collect`` may be **synchronous** (the default; runs inline on the
@@ -65,8 +65,8 @@ class BatchCollector:
         """Resolve the coerced key sets into the maps validation will use.
 
         ``keys`` is the ``{map_name: {coerced_key, ...}}`` derived from the
-        serializer's cached fields. Return a ``{map_name: {lookup_key:
-        value}}`` mapping — **every** map the serializer's cached fields
+        serializer's batch fields. Return a ``{map_name: {lookup_key:
+        value}}`` mapping — **every** map the serializer's batch fields
         need (a missing map means every row gets a miss error for it). The
         result is exposed to serializers as ``serializer.collected`` and as
         ``context["collected"]``.

@@ -1,4 +1,4 @@
-"""Where a cached field's key comes from: the row, the stored row, derivation.
+"""Where a batch field's key comes from: the row, the stored row, derivation.
 
 - a writable field the row sends: the row's value (the only key that can be
   a "not found" error);
@@ -24,9 +24,9 @@ from drf_batch import (
     BatchListSerializer,
     BatchNotFound,
     BatchPermissionDenied,
+    BatchRelatedField,
     BatchSerializer,
-    CachedRelatedField,
-    CachedServiceField,
+    BatchServiceField,
 )
 from tests.apps.demo.models import Customer, Order, Ticker
 from tests.apps.demo.serializers import OrderSerializer
@@ -81,7 +81,7 @@ def test_read_only_field_never_reads_the_row(tickers, customers, orders):
     calls: list[set[Any]] = []
 
     class S(OrderSerializer):
-        flag = CachedServiceField(fetch=spy_fetch(calls), read_only=True)
+        flag = BatchServiceField(fetch=spy_fetch(calls), read_only=True)
 
         class Meta(OrderSerializer.Meta):
             fields = (*OrderSerializer.Meta.fields, "flag")  # type: ignore[assignment]
@@ -107,7 +107,7 @@ def test_read_only_related_field_malformed_row_value_is_not_an_error(
     tickers, customers
 ):
     class S(OrderSerializer):
-        alt = CachedRelatedField(
+        alt = BatchRelatedField(
             model=Ticker, lookup="isin", read_only=True, derived_from="reference_id"
         )
 
@@ -136,7 +136,7 @@ def test_writable_service_field_omitted_on_patch_uses_the_stored_column(orders):
     calls: list[set[Any]] = []
 
     class S(OrderSerializer):
-        reference_id = CachedServiceField(fetch=spy_fetch(calls))  # type: ignore[assignment]
+        reference_id = BatchServiceField(fetch=spy_fetch(calls))  # type: ignore[assignment]
 
     serializer, _ = run(
         S,
@@ -158,7 +158,7 @@ def test_writable_service_field_on_a_foreign_key_uses_the_fk_column(orders, cust
     calls: list[set[Any]] = []
 
     class S(BatchSerializer):
-        customer = CachedServiceField(fetch=spy_fetch(calls), required=False)
+        customer = BatchServiceField(fetch=spy_fetch(calls), required=False)
         volume = serializers.IntegerField(min_value=1)
 
         class Meta:
@@ -175,7 +175,7 @@ def test_writable_service_field_omitted_on_create_has_no_key(tickers, customers)
     calls: list[set[Any]] = []
 
     class S(OrderSerializer):
-        reference_id = CachedServiceField(fetch=spy_fetch(calls), required=False)  # type: ignore[assignment]
+        reference_id = BatchServiceField(fetch=spy_fetch(calls), required=False)  # type: ignore[assignment]
 
     row = {"ticker": "1101", "customer": "112001", "volume": 1}
     serializer, _ = run(S, [row])
@@ -188,7 +188,7 @@ def test_put_omitted_optional_field_uses_the_stored_column(orders):
     calls: list[set[Any]] = []
 
     class S(OrderSerializer):
-        reference_id = CachedServiceField(fetch=spy_fetch(calls), required=False)  # type: ignore[assignment]
+        reference_id = BatchServiceField(fetch=spy_fetch(calls), required=False)  # type: ignore[assignment]
 
     row = {"id": orders[0].pk, "ticker": "1101", "customer": "112001", "volume": 3}
     serializer, _ = run(S, [row], operation="update", partial=False)
@@ -201,7 +201,7 @@ def test_sent_null_wins_over_the_stored_value(orders):
     calls: list[set[Any]] = []
 
     class S(OrderSerializer):
-        reference_id = CachedServiceField(fetch=spy_fetch(calls), allow_null=True)  # type: ignore[assignment]
+        reference_id = BatchServiceField(fetch=spy_fetch(calls), allow_null=True)  # type: ignore[assignment]
 
     serializer, _ = run(
         S, [{"id": orders[0].pk, "reference_id": None}], operation="update"
@@ -227,7 +227,7 @@ def test_related_field_omitted_without_a_reader_adds_no_query(orders):
 
 def test_related_field_read_by_another_gets_stored_keys_in_one_join(orders, tickers):
     class S(OrderSerializer):
-        name = CachedServiceField(
+        name = BatchServiceField(
             fetch=lambda keys, collected, context: {
                 isin: collected["ticker"][isin].name for isin in keys
             },
@@ -255,8 +255,8 @@ def test_related_field_read_by_another_gets_stored_keys_in_one_join(orders, tick
 
 def test_pk_lookup_stored_key_reads_the_fk_column_without_a_join(orders, tickers):
     class S(BatchSerializer):
-        ticker = CachedRelatedField(required=False)
-        echo = CachedServiceField(
+        ticker = BatchRelatedField(required=False)
+        echo = BatchServiceField(
             fetch=lambda keys, collected, context: dict.fromkeys(keys, True),
             derived_from="ticker",
             read_only=True,
@@ -285,12 +285,12 @@ def test_pk_lookup_stored_key_reads_the_fk_column_without_a_join(orders, tickers
 class DerivedSerializer(OrderSerializer):
     """``tag`` is derived from (ticker, volume); ``grade`` from ``tag``."""
 
-    tag = CachedServiceField(
+    tag = BatchServiceField(
         fetch=lambda keys, collected, context: {key: key for key in keys},
         derived_from=("ticker", "volume"),
         read_only=True,
     )
-    grade = CachedServiceField(
+    grade = BatchServiceField(
         fetch=lambda keys, collected, context: {key: "big" for key in keys},
         derived_from="tag",
         key=lambda tag: (tag is not None and tag[1] >= 100) or None,
@@ -303,7 +303,7 @@ class DerivedSerializer(OrderSerializer):
     def validate(self, attrs: dict[str, Any]) -> dict[str, Any]:
         context = cast("dict[str, Any]", self.context)
         context.setdefault("seen", []).append(
-            (self.cached("tag"), self.cached("grade"))
+            (self.fetched("tag"), self.fetched("grade"))
         )
         return attrs
 
@@ -362,7 +362,7 @@ def test_derived_from_a_model_field_not_on_the_serializer(orders):
 
     class S(BatchSerializer):
         volume = serializers.IntegerField(min_value=1)
-        owner_check = CachedServiceField(
+        owner_check = BatchServiceField(
             fetch=spy_fetch(calls), derived_from="reference_id", read_only=True
         )
 
@@ -380,7 +380,7 @@ def test_writable_field_derived_when_omitted(tickers, customers):
     calls: list[set[Any]] = []
 
     class S(OrderSerializer):
-        reference_id = CachedServiceField(  # type: ignore[assignment]
+        reference_id = BatchServiceField(  # type: ignore[assignment]
             fetch=spy_fetch(calls), derived_from="volume", required=False
         )
 
@@ -395,14 +395,14 @@ def test_writable_field_derived_when_omitted(tickers, customers):
 
 
 # ---------------------------------------------------------------------------
-# misses, cached(), collectors
+# misses, fetched(), collectors
 # ---------------------------------------------------------------------------
 
 
 def test_derived_and_stored_misses_are_not_row_errors(orders):
     class S(OrderSerializer):
-        reference_id = CachedServiceField(fetch=spy_fetch([], result={}))  # type: ignore[assignment]
-        band = CachedServiceField(
+        reference_id = BatchServiceField(fetch=spy_fetch([], result={}))  # type: ignore[assignment]
+        band = BatchServiceField(
             fetch=spy_fetch([], result={}), derived_from="volume", read_only=True
         )
 
@@ -410,7 +410,7 @@ def test_derived_and_stored_misses_are_not_row_errors(orders):
             fields = (*OrderSerializer.Meta.fields, "band")  # type: ignore[assignment]
 
         def validate(self, attrs: dict[str, Any]) -> dict[str, Any]:
-            if self.cached("band") is None:
+            if self.fetched("band") is None:
                 raise ValidationError({"band": ["no band"]})
             return attrs
 
@@ -423,7 +423,7 @@ def test_derived_and_stored_misses_are_not_row_errors(orders):
 
 def test_sent_key_miss_is_still_a_row_error(orders):
     class S(OrderSerializer):
-        reference_id = CachedServiceField(fetch=spy_fetch([], result={}))  # type: ignore[assignment]
+        reference_id = BatchServiceField(fetch=spy_fetch([], result={}))  # type: ignore[assignment]
 
     serializer, _ = run(
         S, [{"id": orders[0].pk, "reference_id": "X"}], operation="update"
@@ -433,9 +433,9 @@ def test_sent_key_miss_is_still_a_row_error(orders):
     assert serializer.errors == [{"reference_id": ["Object 'X' not found."]}]
 
 
-def test_cached_keeps_per_field_keys_on_a_shared_map(tickers, customers):
+def test_fetched_keeps_per_field_keys_on_a_shared_map(tickers, customers):
     class S(OrderSerializer):
-        alt = CachedRelatedField(
+        alt = BatchRelatedField(
             model=Ticker,
             lookup="isin",
             map="ticker",
@@ -448,7 +448,7 @@ def test_cached_keeps_per_field_keys_on_a_shared_map(tickers, customers):
 
         def validate(self, attrs: dict[str, Any]) -> dict[str, Any]:
             context = cast("dict[str, Any]", self.context)
-            context["pair"] = (self.cached("ticker"), self.cached("alt"))
+            context["pair"] = (self.fetched("ticker"), self.fetched("alt"))
             return attrs
 
     row = {"ticker": "1101", "customer": "112001", "volume": 1, "reference_id": "1102"}
@@ -458,11 +458,11 @@ def test_cached_keeps_per_field_keys_on_a_shared_map(tickers, customers):
     assert context["pair"] == (tickers[0], tickers[1])
 
 
-def test_cached_rejects_unknown_names_and_is_none_outside_validation():
+def test_fetched_rejects_unknown_names_and_is_none_outside_validation():
     s = OrderSerializer(context={})
     with pytest.raises(KeyError):
-        s.cached("volume")
-    assert s.cached("ticker") is None
+        s.fetched("volume")
+    assert s.fetched("ticker") is None
 
 
 def test_replacement_collector_receives_derived_and_stored_keys(orders):
@@ -493,7 +493,7 @@ def _spied_service() -> tuple[type[BatchSerializer], list[set[Any]]]:
     calls: list[set[Any]] = []
 
     class S(OrderSerializer):
-        reference_id = CachedServiceField(fetch=spy_fetch(calls))  # type: ignore[assignment]
+        reference_id = BatchServiceField(fetch=spy_fetch(calls))  # type: ignore[assignment]
 
     return S, calls
 
@@ -540,7 +540,7 @@ def test_permission_denied_raises_before_any_fetch(orders):
 
 def _build(**field_kwargs: Any) -> None:
     class S(OrderSerializer):
-        extra = CachedServiceField(
+        extra = BatchServiceField(
             fetch=lambda keys, collected, context: {}, read_only=True, **field_kwargs
         )
 
@@ -552,12 +552,12 @@ def _build(**field_kwargs: Any) -> None:
 
 def test_key_without_derived_from_is_a_type_error():
     with pytest.raises(TypeError, match="derived_from"):
-        CachedServiceField(fetch=lambda *a: {}, key=lambda value: value)
+        BatchServiceField(fetch=lambda *a: {}, key=lambda value: value)
 
 
 def test_non_callable_key_is_a_type_error():
     with pytest.raises(TypeError, match="callable"):
-        CachedServiceField(fetch=lambda *a: {}, derived_from="volume", key="nope")  # type: ignore[arg-type]
+        BatchServiceField(fetch=lambda *a: {}, derived_from="volume", key="nope")  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize(
@@ -574,8 +574,8 @@ def test_bad_derived_from_fails_fast(derived_from, match):
 
 def test_derived_from_cycle_fails_fast():
     class S(OrderSerializer):
-        a = CachedServiceField(fetch=lambda *args: {}, derived_from="b", read_only=True)
-        b = CachedServiceField(fetch=lambda *args: {}, derived_from="a", read_only=True)
+        a = BatchServiceField(fetch=lambda *args: {}, derived_from="b", read_only=True)
+        b = BatchServiceField(fetch=lambda *args: {}, derived_from="a", read_only=True)
 
         class Meta(OrderSerializer.Meta):
             fields = (*OrderSerializer.Meta.fields, "a", "b")  # type: ignore[assignment]
@@ -587,7 +587,7 @@ def test_derived_from_cycle_fails_fast():
 def test_derived_from_plain_related_field_fails_fast():
     class S(BatchSerializer):
         ticker = serializers.PrimaryKeyRelatedField(queryset=Ticker.objects.all())
-        extra = CachedServiceField(
+        extra = BatchServiceField(
             fetch=lambda *args: {}, derived_from="ticker", read_only=True
         )
 
@@ -595,7 +595,7 @@ def test_derived_from_plain_related_field_fails_fast():
             model = Order
             fields = ("ticker", "extra")
 
-    with pytest.raises(ImproperlyConfigured, match="CachedRelatedField"):
+    with pytest.raises(ImproperlyConfigured, match="BatchRelatedField"):
         BatchListSerializer(child=S(context={}), data=[])
 
 

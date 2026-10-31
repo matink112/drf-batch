@@ -26,7 +26,7 @@ POST /orders/batch/   →   400 [{}, {"ticker": ["Ticker 'XYZ' not found."]}]
 request latency ≈ longest fetch chain  +  in-memory validation  +  bulk write
 ```
 
-- **Every lookup is fetched once, concurrently.** Each cached field is one
+- **Every lookup is fetched once, concurrently.** Each batch field is one
   query or one service call for the whole batch, no matter how many rows.
   All fetches run as one `asyncio.TaskGroup`: `async def` fetches on the
   event loop, sync ORM fetches on worker threads
@@ -39,8 +39,8 @@ request latency ≈ longest fetch chain  +  in-memory validation  +  bulk write
   database query can be scoped by a service result, with no collector class
   and no ordering code. Cycles and unknown names fail at serializer
   construction, not mid-request.
-- **Database and services in one graph.** `CachedRelatedField` and
-  `CachedServiceField` (sync or `async`) are both nodes in the same graph,
+- **Database and services in one graph.** `BatchRelatedField` and
+  `BatchServiceField` (sync or `async`) are both nodes in the same graph,
   and both are validated the same way (a miss is a 400 row error).
 - **Validation does no I/O.** Rows are validated against the fetched maps, so
   `validate()` receives real model instances and can apply cross-row rules

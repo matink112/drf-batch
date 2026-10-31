@@ -55,7 +55,7 @@ curl -X PATCH http://localhost:8000/orders/batch/ \
 {"count": 1}
 ```
 
-- Cached fields work exactly as in create: `"ticker": "1102"` is coerced,
+- Batch fields work exactly as in create: `"ticker": "1102"` is coerced,
   collected once, and validated against the map.
 - A pk that does not exist, or is outside `get_queryset()`, is a **404** with
   the index-aligned body. A target that fails the object permissions is a

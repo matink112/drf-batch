@@ -74,7 +74,7 @@ def test_count_and_data_responses(schema):
     assert data["content"]["application/json"]["schema"]["type"] == "array"
 
 
-def test_cached_fields_are_typed_by_their_lookup(schema):
+def test_batch_fields_are_typed_by_their_lookup(schema):
     order = schema["components"]["schemas"]["Order"]["properties"]
     symbol = schema["components"]["schemas"]["SymbolOrder"]["properties"]
 

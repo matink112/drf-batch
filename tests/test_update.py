@@ -58,7 +58,7 @@ class TestBatchUpdate:
         # o2.ticker preserved.
         assert o2.ticker == tickers[1]
 
-    def test_update_can_change_a_cached_field(self, client, tickers, customers):
+    def test_update_can_change_a_batch_field(self, client, tickers, customers):
         o1, o2 = create_orders(tickers, customers)
         # o2 holds (tickers[1], customers[0]) — the pair the update would take
         # — so remove it to keep the (ticker, customer) constraint intact.
@@ -168,7 +168,7 @@ class TestBatchUpdate:
 
 class TestUuidPkUpdate:
     # SymbolOrder's own pk is an auto int; the UUID pk is Symbol's, looked up
-    # via the ``symbol`` cached field (str -> UUID coercion, like create).
+    # via the ``symbol`` batch field (str -> UUID coercion, like create).
 
     def test_uuid_pk_update(self, client, symbols):
         symbol_a = symbols[0]

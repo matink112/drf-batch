@@ -59,7 +59,7 @@ class BatchMixin:
         batch_serializer_class: per-row serializer; falls back to the
             viewset's ``serializer_class``.
         batch_collector_class: optional **full-replacement** collection hook.
-            ``None`` (default) auto-collects the serializer's cached fields.
+            ``None`` (default) auto-collects the serializer's batch fields.
         batch_max_size: per-view override of the ``BATCH_MAX_SIZE`` setting.
         batch_use_bulk: bulk writes (default) instead of per-row
             ``create`` / ``update`` / ``delete()`` (which preserve ``save()``
@@ -74,7 +74,7 @@ class BatchMixin:
             or class, or ``None`` (run the write once).
         batch_lock_targets: lock update/destroy targets with
             ``select_for_update()`` during the write (default ``True``).
-        batch_concurrent_collection: fetch the cached fields concurrently
+        batch_concurrent_collection: fetch the batch fields concurrently
             as a dependency graph (default ``True``); ``False`` fetches
             them one by one, sync fetches on the request thread.
         batch_response: ``"count"`` (default) returns ``{"count": N}``;

@@ -14,5 +14,5 @@ Every `BatchMixin` viewset is then documented accurately:
 - the success body (`BatchCount` or the data, per `batch_response`) and the
   index-aligned 400/403/404/409 bodies plus 413/504 are included;
 - operations not in `batch_actions` are excluded;
-- cached fields are typed by their lookup field (`lookup="isin"` is a string,
+- batch fields are typed by their lookup field (`lookup="isin"` is a string,
   a UUID pk a `uuid`).

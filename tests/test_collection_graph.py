@@ -17,9 +17,9 @@ from django.test import override_settings
 
 from drf_batch import (
     BatchListSerializer,
+    BatchRelatedField,
     BatchSerializer,
-    CachedRelatedField,
-    CachedServiceField,
+    BatchServiceField,
     loop,
 )
 from drf_batch.exceptions import BatchCollectionTimeout
@@ -35,14 +35,14 @@ def _shutdown_batch_loop():
 
 
 class _Base(BatchSerializer):
-    # Only `name` is writable; the cached fields under test are read-only.
+    # Only `name` is writable; the batch fields under test are read-only.
     class Meta:
         model = Ticker
         exclude = ("isin",)
 
 
-def _svc(fetch: Any, *depends_on: str) -> CachedServiceField:
-    return CachedServiceField(fetch=fetch, depends_on=depends_on, read_only=True)
+def _svc(fetch: Any, *depends_on: str) -> BatchServiceField:
+    return BatchServiceField(fetch=fetch, depends_on=depends_on, read_only=True)
 
 
 def _validate(child: BatchSerializer, rows: list[dict[str, Any]], **kwargs: Any):
@@ -122,8 +122,8 @@ def test_a_fetch_gets_a_snapshot_that_includes_its_dependencies():
         return {"b": 2}
 
     class S(_Base):
-        one = CachedServiceField(fetch=first, read_only=True)
-        two = CachedServiceField(fetch=second, depends_on=("one",), read_only=True)
+        one = BatchServiceField(fetch=first, read_only=True)
+        two = BatchServiceField(fetch=second, depends_on=("one",), read_only=True)
 
     _, context = _validate(S(), [{"name": "x"}])
 
@@ -142,8 +142,8 @@ def test_sync_fetches_run_concurrently_on_worker_threads():
         return {}
 
     class S(_Base):
-        a = CachedServiceField(fetch=sync_fetch, read_only=True)
-        b = CachedServiceField(fetch=sync_fetch, read_only=True)
+        a = BatchServiceField(fetch=sync_fetch, read_only=True)
+        b = BatchServiceField(fetch=sync_fetch, read_only=True)
 
     _validate(S(), [{"name": "x"}])
 
@@ -163,8 +163,8 @@ def test_mixed_sync_and_async_fetches_share_one_graph():
         return {"y": collected["s"]["x"] + 1}
 
     class S(_Base):
-        s = CachedServiceField(fetch=sync_first, read_only=True)
-        a = CachedServiceField(fetch=async_after, depends_on=("s",), read_only=True)
+        s = BatchServiceField(fetch=sync_first, read_only=True)
+        a = BatchServiceField(fetch=async_after, depends_on=("s",), read_only=True)
 
     _, context = _validate(S(), [{"name": "x"}])
 
@@ -188,9 +188,9 @@ def test_a_failing_fetch_raises_its_own_exception_and_cancels_the_others():
         return {}
 
     class S(_Base):
-        a = CachedServiceField(fetch=boom, read_only=True)
-        b = CachedServiceField(fetch=slow, read_only=True)
-        c = CachedServiceField(fetch=slow, depends_on=("a",), read_only=True)
+        a = BatchServiceField(fetch=boom, read_only=True)
+        b = BatchServiceField(fetch=slow, read_only=True)
+        c = BatchServiceField(fetch=slow, depends_on=("a",), read_only=True)
 
     with pytest.raises(ValueError, match="service down"):
         _validate(S(), [{"name": "x"}])
@@ -204,7 +204,7 @@ def test_the_graph_shares_one_collection_timeout():
         return {}
 
     class S(_Base):
-        a = CachedServiceField(fetch=slow, read_only=True)
+        a = BatchServiceField(fetch=slow, read_only=True)
 
     with pytest.raises(BatchCollectionTimeout):
         _validate(S(), [{"name": "x"}])
@@ -222,9 +222,9 @@ def test_a_map_shared_by_two_fields_is_fetched_once_and_awaited_by_both():
         return {"seen": "data" in collected}
 
     class S(_Base):
-        first = CachedServiceField("data", fetch=shared, read_only=True)
-        second = CachedServiceField("data", fetch=shared, read_only=True)
-        later = CachedServiceField(fetch=after, depends_on=("second",), read_only=True)
+        first = BatchServiceField("data", fetch=shared, read_only=True)
+        second = BatchServiceField("data", fetch=shared, read_only=True)
+        later = BatchServiceField(fetch=after, depends_on=("second",), read_only=True)
 
     _, context = _validate(S(), [{"name": "x"}])
 
@@ -234,7 +234,7 @@ def test_a_map_shared_by_two_fields_is_fetched_once_and_awaited_by_both():
 
 def test_a_plan_with_nothing_to_fetch_starts_no_loop_thread():
     class S(_Base):
-        ticker = CachedRelatedField(model=Ticker, lookup="isin", read_only=True)
+        ticker = BatchRelatedField(model=Ticker, lookup="isin", read_only=True)
 
     # No row supplies a ticker: the lookup is provably empty, so it is skipped.
     _, context = _validate(S(), [{"name": "x"}])
@@ -257,7 +257,7 @@ def test_inside_a_transaction_sync_fetches_run_on_the_request_thread(tickers):
         return {"n": len(collected["db"])}
 
     class S(_Base):
-        db = CachedServiceField(fetch=sync_fetch, read_only=True)
+        db = BatchServiceField(fetch=sync_fetch, read_only=True)
         count = _svc(async_fetch, "db")
 
     _, context = _validate(S(), [{"name": "x"}])
@@ -275,7 +275,7 @@ def test_inside_a_transaction_the_timeout_still_applies(tickers):
         return {}
 
     class S(_Base):
-        a = CachedServiceField(fetch=slow, read_only=True)
+        a = BatchServiceField(fetch=slow, read_only=True)
 
     with pytest.raises(BatchCollectionTimeout):
         _validate(S(), [{"name": "x"}])
@@ -293,8 +293,8 @@ def test_sequential_mode_runs_sync_inline_and_bridges_async_one_by_one():
         return {"y": collected["s"]["x"]}
 
     class S(_Base):
-        s = CachedServiceField(fetch=sync_fetch, read_only=True)
-        a = CachedServiceField(fetch=async_fetch, read_only=True)
+        s = BatchServiceField(fetch=sync_fetch, read_only=True)
+        a = BatchServiceField(fetch=async_fetch, read_only=True)
 
     _, context = _validate(S(), [{"name": "x"}], concurrent_collection=False)
 
@@ -309,8 +309,8 @@ def test_sequential_mode_shares_one_timeout_across_fetches():
         return {}
 
     class S(_Base):
-        a = CachedServiceField(fetch=slow, read_only=True)
-        b = CachedServiceField(fetch=slow, read_only=True)
+        a = BatchServiceField(fetch=slow, read_only=True)
+        b = BatchServiceField(fetch=slow, read_only=True)
 
     with pytest.raises(BatchCollectionTimeout):
         _validate(S(), [{"name": "x"}], concurrent_collection=False)

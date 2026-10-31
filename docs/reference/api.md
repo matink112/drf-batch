@@ -12,7 +12,7 @@ without notice before 1.0.
 
 ::: drf_batch.BatchSerializer
     options:
-      members: [collected, cached, get_cached_fields, many_init]
+      members: [collected, fetched, get_batch_fields, many_init]
 
 ::: drf_batch.BatchListSerializer
     options:
@@ -24,17 +24,17 @@ without notice before 1.0.
 
 ::: drf_batch.BatchOperation
 
-## Cached fields
+## Batch fields
 
-::: drf_batch.CachedField
+::: drf_batch.BatchField
     options:
       members: [prepare_key, fetch, derived_key, stored_key_path, to_representation]
 
-::: drf_batch.CachedRelatedField
+::: drf_batch.BatchRelatedField
     options:
       members: [get_queryset, fetch, to_representation]
 
-::: drf_batch.CachedServiceField
+::: drf_batch.BatchServiceField
 
 ## Collector
 

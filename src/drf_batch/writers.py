@@ -147,7 +147,7 @@ class CreateWriter(BatchWriter):
     def _write(self, ctx: PipelineContext, extra: dict[str, Any]) -> list[Any]:
         rows = [{**payload, **extra} for _index, payload, _pk in ctx.rows]
         if self._config.use_bulk:
-            # Rows already contain FK instances (CachedRelatedField /
+            # Rows already contain FK instances (BatchRelatedField /
             # PrimaryKeyRelatedField), and every key is a model field by the
             # init check, so Model(**row) is safe.
             assert self._model is not None

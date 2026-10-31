@@ -9,9 +9,9 @@
      targets      update/destroy: get_queryset().in_bulk(pks) (request thread)
      not found    target pk missing or out of scope       → 404
      permission   check_object_permissions(target)        → 403
-     keys         keys of the cached fields a row did not send (read_only
+     keys         keys of the batch fields a row did not send (read_only
                   fields never read it): derived_from, else the stored value
-     collection   the replacement collector, or the cached fields as one
+     collection   the replacement collector, or the batch fields as one
                   dependency graph (TaskGroup: each fetch starts when its
                   depends_on are done) on the EVENT_LOOP loop; sync fetches on
                   worker threads (request thread inside a transaction);

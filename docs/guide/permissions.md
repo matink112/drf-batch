@@ -15,7 +15,7 @@ The batch route follows the same authorization rules as DRF's detail routes:
 
 - Rows are validated only after both checks pass, so a caller never learns
   validation details about rows it cannot modify.
-- Cached lookups are scoped with `CachedRelatedField(queryset=...)` (see [Scoping lookups](collection.md#scoping-lookups)).
+- Batch-field lookups are scoped with `BatchRelatedField(queryset=...)` (see [Scoping lookups](collection.md#scoping-lookups)).
 
 ```python
 class OwnedOrderViewSet(BatchMixin, GenericViewSet):

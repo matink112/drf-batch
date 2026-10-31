@@ -24,7 +24,7 @@ Pass order (and therefore error precedence):
   -> collection -> duplicate pk (409)
 
 No fetch runs for a request that fails with 404 or 403. The keys pass fills
-in the keys of cached fields the row did not send (``read_only`` fields
+in the keys of batch fields the row did not send (``read_only`` fields
 never read the row): derived from other fields (``derived_from``) or, on
 update, the target's stored value.
 
@@ -80,8 +80,8 @@ from drf_batch.exceptions import (
 )
 from drf_batch.fields import (
     NO_KEY,
-    CachedField,
-    CachedRelatedField,
+    BatchField,
+    BatchRelatedField,
     _coerce_lookup_key,
     _model_field,
 )
@@ -110,9 +110,9 @@ class PipelineContext:
     # -- state (populated by the passes, in order) ----------------------
     # Extraction + keys output: {map: coerced keys} for the collection pass.
     key_sets: dict[str, set[Any]] = dataclasses.field(default_factory=dict)
-    # Per-survivor {cached field name: key}: extraction records the keys the
+    # Per-survivor {batch field name: key}: extraction records the keys the
     # row sent, the keys pass the rest (stored or derived; NO_KEY for none).
-    # BatchSerializer.cached() reads it during row validation.
+    # BatchSerializer.fetched() reads it during row validation.
     row_keys: dict[int, dict[str, Any]] = dataclasses.field(default_factory=dict)
     # Pass-1 survivors: (index, raw_row). For destroy the raw row is the
     # coerced pk scalar.
@@ -205,7 +205,7 @@ def _required_message() -> str:
 
 
 class CreateExtractionPass(PipelinePass):
-    """Pass 1 for create: shape + cached key extraction.
+    """Pass 1 for create: shape + batch-field key extraction.
 
     Malformed keys are row errors and the row is excluded from later passes
     (same precedent as non-dict rows).
@@ -213,8 +213,8 @@ class CreateExtractionPass(PipelinePass):
 
     name: ClassVar[str] = "create_extraction"
 
-    def __init__(self, cached_fields: list[CachedField]) -> None:
-        self._cached_fields = cached_fields
+    def __init__(self, batch_fields: list[BatchField]) -> None:
+        self._batch_fields = batch_fields
 
     def run(self, ctx: PipelineContext) -> None:
         for index, item in enumerate(ctx.data):
@@ -226,7 +226,7 @@ class CreateExtractionPass(PipelinePass):
                 continue
             row_error: dict[str, Any] = {}
             pk = self._extract_pk(item, row_error)
-            row_key_map = self._extract_cached_keys(item, row_error, ctx.key_sets)
+            row_key_map = self._extract_batch_keys(item, row_error, ctx.key_sets)
             if row_error:
                 # Keys this row already added to key_sets are harmless: any
                 # row error raises before collection runs.
@@ -241,20 +241,20 @@ class CreateExtractionPass(PipelinePass):
         """Create rows carry no target pk."""
         return NO_KEY
 
-    def _extract_cached_keys(
+    def _extract_batch_keys(
         self,
         item: dict[str, Any],
         row_error: dict[str, Any],
         key_sets: dict[str, set[Any]],
     ) -> dict[str, Any]:
-        """Coerce the key of every writable cached field the row sends.
+        """Coerce the key of every writable batch field the row sends.
 
         ``read_only`` fields never read the row; omitted fields get their
         key in the keys pass. Returns ``{field name: key}`` (a sent ``null``
         is :data:`NO_KEY`: the row wins, nothing is filled in for it).
         """
         row_key_map: dict[str, Any] = {}
-        for field in self._cached_fields:
+        for field in self._batch_fields:
             # DRF reads the row's input key from the field name (the source
             # names the validated_data/output attribute).
             name = field.field_name
@@ -273,17 +273,17 @@ class CreateExtractionPass(PipelinePass):
 
 
 class UpdateExtractionPass(CreateExtractionPass):
-    """Pass 1 for update: shape + target pk + cached key extraction."""
+    """Pass 1 for update: shape + target pk + batch-field key extraction."""
 
     name: ClassVar[str] = "update_extraction"
 
     def __init__(
         self,
-        cached_fields: list[CachedField],
+        batch_fields: list[BatchField],
         pk_field: models.Field,
         pk_name: str,
     ) -> None:
-        super().__init__(cached_fields)
+        super().__init__(batch_fields)
         self._pk_field = pk_field
         self._pk_name = pk_name
 
@@ -364,7 +364,7 @@ class TargetPass(PipelinePass):
 class _RowValues:
     """One row's values for ``derived_from``, read lazily and memoized.
 
-    - a cached field: its key for the row (already resolved: key order);
+    - a batch field: its key for the row (already resolved: key order);
     - a plain serializer field the row sends (not read-only): the field's
       ``to_internal_value``, ``None`` if invalid (row validation reports it);
     - otherwise the target's stored value (``None`` on create).
@@ -415,8 +415,8 @@ class _RowValues:
 class KeyPlan:
     """The construction-time plan of the keys pass (see :func:`build_key_plan`)."""
 
-    # Cached fields in key order (derived_from sources first).
-    fields: list[CachedField]
+    # Batch fields in key order (derived_from sources first).
+    fields: list[BatchField]
     # Field name -> where an update target stores its key (only for the
     # fields that use it).
     stored_paths: dict[str, tuple[str, ...]]
@@ -429,7 +429,7 @@ class KeyPlan:
 
 
 class KeyPass(PipelinePass):
-    """Fill in the keys of the cached fields each row did not send.
+    """Fill in the keys of the batch fields each row did not send.
 
     Per row, in key order: a field the row sent keeps its key; otherwise
     ``derived_from`` builds it, or, on update, the target's stored value
@@ -471,7 +471,7 @@ class CollectionPass(PipelinePass):
     """Run the collector or the auto plan over the key sets.
 
     update/destroy targets (fetched by :class:`TargetPass`) are exposed as
-    ``collected[pk_name]``. Cached fields are collected for create and
+    ``collected[pk_name]``. Batch fields are collected for create and
     update (destroy has no row payload).
 
     The auto plan runs as a dependency graph (``concurrent=True``, the
@@ -489,7 +489,7 @@ class CollectionPass(PipelinePass):
 
     def __init__(
         self,
-        plan: list[CachedField],
+        plan: list[BatchField],
         operation: BatchOperation,
         pk_name: str,
         collector: BatchCollector | None,
@@ -527,7 +527,7 @@ class CollectionPass(PipelinePass):
             )
         return dict(cast("dict[str, Any]", result))
 
-    def _skipped(self, ctx: PipelineContext, field: CachedField) -> bool:
+    def _skipped(self, ctx: PipelineContext, field: BatchField) -> bool:
         """An empty key set makes this fetch provably ``{}``: no call."""
         return field.skip_fetch_on_empty_keys and not ctx.key_sets.get(field.map)
 
@@ -567,7 +567,7 @@ class CollectionPass(PipelinePass):
         by_name: dict[str | None, asyncio.Task[None]] = {}
         by_map: dict[str, asyncio.Task[None]] = {}
 
-        async def run(field: CachedField, deps: list[asyncio.Task[None]]) -> None:
+        async def run(field: BatchField, deps: list[asyncio.Task[None]]) -> None:
             if deps:
                 await asyncio.gather(*deps)
             # A snapshot: seed + everything finished so far, which includes
@@ -713,7 +713,7 @@ class RowValidationPass(PipelinePass):
     """Per-row ``child.run_validation`` against the collected maps.
 
     Update rows are validated with their target instance set (DRF's update
-    pattern); every row with its keys exposed to ``child.cached()``.
+    pattern); every row with its keys exposed to ``child.fetched()``.
     """
 
     name: ClassVar[str] = "row_validation"
@@ -785,29 +785,29 @@ class BatchPipeline:
 # ---------------------------------------------------------------------------
 
 
-def build_collection_plan(child: BatchSerializer) -> list[CachedField]:
+def build_collection_plan(child: BatchSerializer) -> list[BatchField]:
     """Resolve the collection plan; fail fast on bad configuration.
 
     Resolves related models and lookup fields, validates that every
-    ``depends_on`` name names a declared cached field, and orders the plan
+    ``depends_on`` name names a declared batch field, and orders the plan
     topologically (declaration order as tie-break). Unknown names or cycles
     raise ``ImproperlyConfigured``.
     """
-    fields = child.get_cached_fields()
+    fields = child.get_batch_fields()
     names = {f.field_name for f in fields if f.field_name is not None}
     for field in fields:
-        if isinstance(field, CachedRelatedField):
+        if isinstance(field, BatchRelatedField):
             field._resolve_model()
             field._resolve_lookup_field()
         for dep in field.depends_on:
             if dep not in names:
                 raise ImproperlyConfigured(
-                    f"BatchListSerializer: cached field "
-                    f"'{field.field_name}' depends_on unknown cached "
-                    f"field '{dep}'. Declared cached fields: "
+                    f"BatchListSerializer: batch field "
+                    f"'{field.field_name}' depends_on unknown batch "
+                    f"field '{dep}'. Declared batch fields: "
                     f"{', '.join(sorted(names)) or 'none'}."
                 )
-    ordered: list[CachedField] = []
+    ordered: list[BatchField] = []
     scheduled: set[str] = set()
     remaining = list(fields)
     while remaining:
@@ -821,7 +821,7 @@ def build_collection_plan(child: BatchSerializer) -> list[CachedField]:
                 progressed = True
         if not progressed:
             raise ImproperlyConfigured(
-                "BatchListSerializer: circular depends_on among cached "
+                "BatchListSerializer: circular depends_on among batch "
                 "fields: " + " -> ".join(f.field_name or "?" for f in remaining)
             )
     return ordered
@@ -832,28 +832,28 @@ def build_key_plan(child: BatchSerializer, model: type[models.Model] | None) -> 
 
     Validates every ``derived_from`` name (a serializer field other than the
     field itself and not a plain DRF relation, or a concrete field of
-    ``Meta.model``), orders the cached fields so ``derived_from`` sources
-    come first (cycles raise), and plans the stored keys: for every cached
+    ``Meta.model``), orders the batch fields so ``derived_from`` sources
+    come first (cycles raise), and plans the stored keys: for every batch
     field without ``derived_from`` whose source is stored on ``Meta.model``
-    — except a writable related field that no other cached field reads
+    — except a writable related field that no other batch field reads
     (``derived_from`` / ``depends_on``), whose stored key nothing needs.
     """
-    fields = child.get_cached_fields()
-    cached_names = {f.field_name for f in fields}
+    fields = child.get_batch_fields()
+    batch_names = {f.field_name for f in fields}
     plain_fields: dict[str, Any] = {}
     model_attnames: dict[str, str] = {}
     for field in fields:
-        prefix = f"BatchListSerializer: cached field '{field.field_name}' derived_from"
+        prefix = f"BatchListSerializer: batch field '{field.field_name}' derived_from"
         for name in field.derived_from:
             if name == field.field_name:
                 raise ImproperlyConfigured(f"{prefix} names the field itself.")
-            if name in cached_names:
+            if name in batch_names:
                 continue
             declared = child.fields.get(name)
             if isinstance(declared, (RelatedField, ManyRelatedField)):
                 raise ImproperlyConfigured(
                     f"{prefix} '{name}': a plain related field would query per "
-                    "row; declare it as a CachedRelatedField."
+                    "row; declare it as a BatchRelatedField."
                 )
             if declared is not None:
                 plain_fields[name] = declared
@@ -866,18 +866,18 @@ def build_key_plan(child: BatchSerializer, model: type[models.Model] | None) -> 
                 )
             model_attnames[name] = model_field.attname
 
-    ordered: list[CachedField] = []
+    ordered: list[BatchField] = []
     done: set[str | None] = set()
     remaining = list(fields)
     while remaining:
         ready = [
             f
             for f in remaining
-            if all(n in done or n not in cached_names for n in f.derived_from)
+            if all(n in done or n not in batch_names for n in f.derived_from)
         ]
         if not ready:
             raise ImproperlyConfigured(
-                "BatchListSerializer: circular derived_from among cached "
+                "BatchListSerializer: circular derived_from among batch "
                 "fields: " + " -> ".join(f.field_name or "?" for f in remaining)
             )
         for field in ready:
@@ -899,7 +899,7 @@ def build_key_plan(child: BatchSerializer, model: type[models.Model] | None) -> 
         if model is None or field.derived_from:
             continue
         if (
-            isinstance(field, CachedRelatedField)
+            isinstance(field, BatchRelatedField)
             and not field.read_only
             and field_name not in read
         ):
@@ -924,7 +924,7 @@ def build_pipeline(
     config: BatchConfig,
     child: BatchSerializer,
     model: type[models.Model] | None,
-    plan: list[CachedField],
+    plan: list[BatchField],
     conflict_rules: list[tuple[str, ...]],
 ) -> BatchPipeline:
     """Assemble the per-operation pass sequence (see the module docstring)."""
@@ -933,13 +933,13 @@ def build_pipeline(
     from drf_batch.conflicts import ConflictPass
 
     operation = config.operation
-    cached_fields = child.get_cached_fields()
+    batch_fields = child.get_batch_fields()
 
     if operation == BatchOperation.CREATE:
         pk_name = model._meta.pk.name if model is not None else "id"
         return BatchPipeline(
             [
-                CreateExtractionPass(cached_fields),
+                CreateExtractionPass(batch_fields),
                 KeyPass(build_key_plan(child, model)),
                 CollectionPass(
                     plan,
@@ -977,7 +977,7 @@ def build_pipeline(
             return queryset.select_related(*selects) if selects else queryset
 
         passes = [
-            UpdateExtractionPass(cached_fields, pk_field, pk_name),
+            UpdateExtractionPass(batch_fields, pk_field, pk_name),
             TargetPass(update_target_queryset),
             NotFoundPass(pk_name),
         ]

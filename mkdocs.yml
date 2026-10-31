@@ -34,7 +34,7 @@ nav:
   - Quickstart: quickstart.md
   - Cookbook: https://github.com/matink112/drf-batch-cookbook
   - Guide:
-      - Collection and cached fields: guide/collection.md
+      - Collection and batch fields: guide/collection.md
       - Async collection: guide/async.md
       - Permissions and scoping: guide/permissions.md
       - Hooks and responses: guide/hooks.md

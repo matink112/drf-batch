@@ -5,7 +5,7 @@ from typing import Any
 from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
 
-from drf_batch import BatchSerializer, CachedRelatedField, CachedServiceField
+from drf_batch import BatchRelatedField, BatchSerializer, BatchServiceField
 
 from .models import Customer, Order, SymbolOrder, Ticker
 
@@ -17,8 +17,8 @@ class OrderSerializer(BatchSerializer):
     named after the fields); no collector class is needed.
     """
 
-    ticker = CachedRelatedField(lookup="isin", error="Ticker '{value}' not found.")
-    customer = CachedRelatedField(lookup="isin", error="Customer '{value}' not found.")
+    ticker = BatchRelatedField(lookup="isin", error="Ticker '{value}' not found.")
+    customer = BatchRelatedField(lookup="isin", error="Customer '{value}' not found.")
     volume = serializers.IntegerField(min_value=1)
     reference_id = serializers.CharField(max_length=64)
 
@@ -54,7 +54,7 @@ class RawOrderSerializer(BatchSerializer):
 class SymbolOrderSerializer(BatchSerializer):
     """UUID primary-key lookup: symbol auto-collects against Symbol's pk."""
 
-    symbol = CachedRelatedField()
+    symbol = BatchRelatedField()
     volume = serializers.IntegerField(min_value=1)
     reference_id = serializers.CharField(max_length=64)
 
@@ -63,7 +63,7 @@ class SymbolOrderSerializer(BatchSerializer):
         fields = ("id", "symbol", "volume", "reference_id")
 
 
-class ExchangeScopedTickerField(CachedRelatedField):
+class ExchangeScopedTickerField(BatchRelatedField):
     """DB-after-service: a DB fetch restricted to the service's band 'A'.
 
     The map only holds tickers the ``band`` service listed on exchange A,
@@ -106,14 +106,14 @@ class ServiceOrderSerializer(BatchSerializer):
     ``exchange_ticker`` is a DB lookup fetched *after* the service field.
     Both are read-only (the row's value is ignored) and keyed by the row's
     ticker (``derived_from``): the one it sends, or, on a PATCH that omits
-    it, the stored one. ``validate()`` reads them via ``self.cached()``.
+    it, the stored one. ``validate()`` reads them via ``self.fetched()``.
     """
 
-    ticker = CachedRelatedField(lookup="isin", error="Ticker '{value}' not found.")
-    customer = CachedRelatedField(lookup="isin", error="Customer '{value}' not found.")
+    ticker = BatchRelatedField(lookup="isin", error="Ticker '{value}' not found.")
+    customer = BatchRelatedField(lookup="isin", error="Customer '{value}' not found.")
     volume = serializers.IntegerField(min_value=1)
     reference_id = serializers.CharField(max_length=64)
-    band = CachedServiceField(
+    band = BatchServiceField(
         fetch=fetch_bands,
         derived_from="ticker",
         depends_on=("ticker",),
@@ -141,9 +141,9 @@ class ServiceOrderSerializer(BatchSerializer):
 
     def validate(self, attrs: dict[str, Any]) -> dict[str, Any]:
         # Cross-field rules that consume the service results (zero I/O).
-        if self.cached("band") == "B":
+        if self.fetched("band") == "B":
             raise ValidationError({"ticker": ["Ticker is suspended on exchange B."]})
-        if self.cached("exchange_ticker") is None:
+        if self.fetched("exchange_ticker") is None:
             raise ValidationError(
                 {"exchange_ticker": ["Ticker is not listed on exchange A."]}
             )
@@ -162,7 +162,7 @@ class ExternalRefOrderSerializer(OrderSerializer):
 class ScopedTickerOrderSerializer(OrderSerializer):
     """The ticker lookup is scoped: only tickers named 'Alpha Corp' resolve."""
 
-    ticker = CachedRelatedField(
+    ticker = BatchRelatedField(
         queryset=Ticker.objects.filter(name="Alpha Corp"),
         lookup="isin",
         error="Ticker '{value}' not found.",

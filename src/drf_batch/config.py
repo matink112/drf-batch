@@ -53,7 +53,7 @@ class BatchConfig:
         The mixin passes ``view.check_object_permissions``.
     :param lock_targets: re-fetch update/destroy targets with
         ``select_for_update()`` inside the write transaction.
-    :param concurrent_collection: run the cached fields' fetches as a
+    :param concurrent_collection: run the batch fields' fetches as a
         dependency graph on the event loop, each one as soon as its
         ``depends_on`` are done (sync fetches on worker threads). ``False``
         runs them one by one in plan order, sync fetches on the request

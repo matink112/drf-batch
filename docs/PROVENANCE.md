@@ -11,7 +11,7 @@ This package is the generalized, open-source release of that mechanism.
 ## What was kept
 
 Only the generic mechanism: the batch viewset actions, the collection step
-(cached fields, the `depends_on` graph and the collector hook),
+(batch fields, the `depends_on` graph and the collector hook),
 dictionary-backed relation fields, index-aligned row errors, whole-batch
 conflict detection, and the all-or-none write.
 

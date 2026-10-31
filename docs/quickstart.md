@@ -25,19 +25,19 @@ class Order(models.Model):
     volume = models.IntegerField()
 ```
 
-## 2. Serializer — declare the cached fields, nothing else
+## 2. Serializer — declare the batch fields, nothing else
 
 ```python
 # quickstart_app/serializers.py
-from drf_batch import BatchSerializer, CachedRelatedField
+from drf_batch import BatchSerializer, BatchRelatedField
 from rest_framework import serializers
 
 from .models import Order
 
 
 class OrderSerializer(BatchSerializer):
-    ticker = CachedRelatedField(lookup="isin", error="Ticker '{value}' not found.")
-    customer = CachedRelatedField(lookup="isin", error="Customer '{value}' not found.")
+    ticker = BatchRelatedField(lookup="isin", error="Ticker '{value}' not found.")
+    customer = BatchRelatedField(lookup="isin", error="Customer '{value}' not found.")
     volume = serializers.IntegerField(min_value=1)
 
     class Meta:
@@ -52,13 +52,13 @@ resolve a `CharField` lookup; a malformed key is a 400 row error, not a 500),
 fetches one query per field, and validates all rows against the results.
 The map is named after the field (`collected["ticker"]`); pass `map=` to
 override, `model=`/`lookup=` for non-FK lookups, and `depends_on=(...)` to
-order fetches (see [Collection and cached fields](guide/collection.md)).
+order fetches (see [Collection and batch fields](guide/collection.md)).
 
 A hit returns the **model instance**, so `create()` receives an FK instance
 and your own `validate()` can inspect it (`data["ticker"].isin`) without
 touching the database.
 
-Like DRF's `RelatedField`, a `CachedRelatedField` can be scoped so a client
+Like DRF's `RelatedField`, a `BatchRelatedField` can be scoped so a client
 cannot reference rows it may not see: pass `queryset=` or override
 `get_queryset()` (`self.context["request"]` is available). The same field
 renders the lookup value (`"1101"`) on the read path, so one serializer can
@@ -142,7 +142,7 @@ indexes:
 
 ## Next steps
 
-- [Collection and cached fields](guide/collection.md): lookups, service
+- [Collection and batch fields](guide/collection.md): lookups, service
   fields, `depends_on`, replacement collectors.
 - [Permissions and scoping](guide/permissions.md): how update and delete
   respect `get_queryset()` and object permissions.

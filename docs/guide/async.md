@@ -14,9 +14,9 @@ async def fetch_bands(keys, collected, context):
 
 
 class OrderSerializer(BatchSerializer):
-    ticker = CachedRelatedField(lookup="isin", error="Ticker '{value}' not found.")
-    customer = CachedRelatedField(lookup="isin", error="Customer '{value}' not found.")
-    band = CachedServiceField(fetch=fetch_bands, depends_on=("ticker",), read_only=True)
+    ticker = BatchRelatedField(lookup="isin", error="Ticker '{value}' not found.")
+    customer = BatchRelatedField(lookup="isin", error="Customer '{value}' not found.")
+    band = BatchServiceField(fetch=fetch_bands, depends_on=("ticker",), read_only=True)
     volume = serializers.IntegerField(min_value=1)
 
     class Meta:

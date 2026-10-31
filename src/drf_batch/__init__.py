@@ -11,7 +11,7 @@ from drf_batch.exceptions import (
     BatchPermissionDenied,
     BatchSizeLimitExceeded,
 )
-from drf_batch.fields import CachedField, CachedRelatedField, CachedServiceField
+from drf_batch.fields import BatchField, BatchRelatedField, BatchServiceField
 from drf_batch.mixins import BatchMixin
 from drf_batch.retry import FixedRetryPolicy, RetryPolicy
 from drf_batch.serializers import BatchListSerializer, BatchSerializer
@@ -24,16 +24,16 @@ __all__ = [
     "BatchConfig",
     "BatchConflict",
     "BatchContext",
+    "BatchField",
     "BatchListSerializer",
     "BatchMixin",
     "BatchNotFound",
     "BatchOperation",
     "BatchPermissionDenied",
+    "BatchRelatedField",
     "BatchSerializer",
+    "BatchServiceField",
     "BatchSizeLimitExceeded",
-    "CachedField",
-    "CachedRelatedField",
-    "CachedServiceField",
     "FixedRetryPolicy",
     "RetryPolicy",
     "__version__",

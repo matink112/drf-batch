@@ -1,7 +1,7 @@
 """Replacement-hook collectors (auto collection is the default).
 
 Each ``collect`` receives the coerced key sets derived from the serializer's
-cached fields (``{"ticker": {...}, "customer": {...}}``) and must return
+batch fields (``{"ticker": {...}, "customer": {...}}``) and must return
 every map the fields need.
 """
 

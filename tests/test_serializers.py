@@ -19,9 +19,9 @@ from rest_framework.exceptions import ValidationError
 from drf_batch import (
     BatchCollector,
     BatchListSerializer,
+    BatchRelatedField,
     BatchSerializer,
-    CachedRelatedField,
-    CachedServiceField,
+    BatchServiceField,
     loop,
 )
 from drf_batch.exceptions import BatchCollectionTimeout, BatchConflict
@@ -256,7 +256,7 @@ def test_django_validation_error_from_child_is_normalized(tickers, customers):
 def test_auto_collection_fetches_with_exact_key_sets(tickers, customers):
     calls: list[set[Any]] = []
 
-    class SpyTicker(CachedRelatedField):
+    class SpyTicker(BatchRelatedField):
         def fetch(self, keys, collected, context):
             calls.append(set(keys))
             return super().fetch(keys, collected, context)
@@ -293,7 +293,7 @@ def test_source_differing_from_field_name_follows_drf_input_semantics(
     # value under the source; extraction, collection, and create follow
     # that (the FK auto-resolves from the source's attribute name).
     class S(OrderSerializer):
-        ticker_sym = CachedRelatedField(
+        ticker_sym = BatchRelatedField(
             source="ticker", lookup="isin", error="Ticker '{value}' not found."
         )
 
@@ -327,7 +327,7 @@ def test_source_differing_from_field_name_follows_drf_input_semantics(
 
 def test_source_differing_from_field_name_keys_pass1_errors(tickers, customers):
     class S(OrderSerializer):
-        ticker_sym = CachedRelatedField(
+        ticker_sym = BatchRelatedField(
             source="ticker", lookup="isin", error="Ticker '{value}' not found."
         )
 
@@ -360,7 +360,7 @@ def test_source_differing_from_field_name_keys_pass1_errors(tickers, customers):
 def test_malformed_key_is_400_and_fetch_never_called(tickers, customers):
     calls: list[set[Any]] = []
 
-    class SpyTicker(CachedRelatedField):
+    class SpyTicker(BatchRelatedField):
         def fetch(self, keys, collected, context):
             calls.append(set(keys))
             return super().fetch(keys, collected, context)
@@ -390,7 +390,7 @@ def test_malformed_key_is_400_and_fetch_never_called(tickers, customers):
 def test_empty_key_set_skips_the_fetch(tickers, customers):
     calls: list[set[Any]] = []
 
-    class SpyTicker(CachedRelatedField):
+    class SpyTicker(BatchRelatedField):
         def fetch(self, keys, collected, context):
             calls.append(set(keys))
             return super().fetch(keys, collected, context)
@@ -413,7 +413,7 @@ def test_empty_key_set_skips_the_fetch(tickers, customers):
 def test_two_fields_sharing_a_map_do_one_union_fetch(tickers, customers):
     calls: list[set[Any]] = []
 
-    class SpyTicker(CachedRelatedField):
+    class SpyTicker(BatchRelatedField):
         def fetch(self, keys, collected, context):
             calls.append(set(keys))
             return super().fetch(keys, collected, context)
@@ -422,7 +422,7 @@ def test_two_fields_sharing_a_map_do_one_union_fetch(tickers, customers):
         ticker = SpyTicker(lookup="isin", error="Ticker '{value}' not found.")
         # Read-only: its key is derived (here from reference_id), not read
         # from the row.
-        ticker_alt = CachedRelatedField(
+        ticker_alt = BatchRelatedField(
             lookup="isin",
             model=Ticker,
             map="ticker",
@@ -480,8 +480,8 @@ def test_depends_on_orders_fetches_topologically(tickers, customers):
 
     class DepSerializer(BatchSerializer):
         # Declared before its dependency on purpose.
-        svc = CachedServiceField(fetch=svc_fetch, depends_on=("db",), read_only=True)
-        db = CachedServiceField(fetch=db_fetch, read_only=True)
+        svc = BatchServiceField(fetch=svc_fetch, depends_on=("db",), read_only=True)
+        db = BatchServiceField(fetch=db_fetch, read_only=True)
 
         class Meta:
             model = Order
@@ -508,13 +508,11 @@ def test_dependency_fetch_sees_the_maps_collected_so_far(tickers, customers):
         return {"x": 1}
 
     class DepSerializer(BatchSerializer):
-        ticker = CachedRelatedField(lookup="isin", error="Ticker '{value}' not found.")
-        customer = CachedRelatedField(
+        ticker = BatchRelatedField(lookup="isin", error="Ticker '{value}' not found.")
+        customer = BatchRelatedField(
             lookup="isin", error="Customer '{value}' not found."
         )
-        svc = CachedServiceField(
-            fetch=svc_fetch, depends_on=("ticker",), read_only=True
-        )
+        svc = BatchServiceField(fetch=svc_fetch, depends_on=("ticker",), read_only=True)
         volume = serializers.IntegerField(min_value=1)
         reference_id = serializers.CharField(max_length=64)
 
@@ -543,7 +541,7 @@ def test_dependency_fetch_sees_the_maps_collected_so_far(tickers, customers):
 
 def test_unknown_dependency_raises_improperly_configured():
     class S(BatchSerializer):
-        a = CachedServiceField(
+        a = BatchServiceField(
             fetch=lambda keys, collected, context: {},
             depends_on=("nope",),
             read_only=True,
@@ -553,16 +551,16 @@ def test_unknown_dependency_raises_improperly_configured():
             model = Order
             fields = ("a",)
 
-    with pytest.raises(ImproperlyConfigured, match="unknown cached field 'nope'"):
+    with pytest.raises(ImproperlyConfigured, match="unknown batch field 'nope'"):
         BatchListSerializer(child=S(context={}), data=[])
 
 
 def test_circular_dependency_raises_improperly_configured():
     class S(BatchSerializer):
-        a = CachedServiceField(
+        a = BatchServiceField(
             fetch=lambda keys, collected, context: {}, depends_on=("b",), read_only=True
         )
-        b = CachedServiceField(
+        b = BatchServiceField(
             fetch=lambda keys, collected, context: {}, depends_on=("a",), read_only=True
         )
 
@@ -575,7 +573,7 @@ def test_circular_dependency_raises_improperly_configured():
 
 
 # ---------------------------------------------------------------------------
-# read-only cached fields
+# read-only batch fields
 # ---------------------------------------------------------------------------
 
 
@@ -653,7 +651,7 @@ def test_service_fetch_runs_without_own_keys_and_feeds_validate(tickers, custome
 def test_db_after_service_scoped_fetch_miss(tickers, customers):
     # Ticker 1103 has no band, so the scoped DB fetch (band-'A' only) does
     # not return it. A derived key's miss is no row error by itself:
-    # validate() rejects it via self.cached().
+    # validate() rejects it via self.fetched().
     Ticker.objects.create(isin="1103", name="Gamma Corp")
     rows = [
         {
@@ -758,7 +756,7 @@ def test_async_service_fetch_bridged_to_the_loop(tickers, customers):
         return {"A": [t.isin for t in collected.get("ticker", {}).values()]}
 
     class Svc(OrderSerializer):
-        band = CachedServiceField(
+        band = BatchServiceField(
             fetch=async_band, depends_on=("ticker",), read_only=True
         )
 
@@ -807,7 +805,7 @@ def test_async_fetch_timeout_is_a_collection_timeout(tickers, customers):
         return {}
 
     class Svc(OrderSerializer):
-        band = CachedServiceField(fetch=slow_band, read_only=True)
+        band = BatchServiceField(fetch=slow_band, read_only=True)
 
         class Meta:
             model = Order
@@ -836,7 +834,7 @@ def test_sync_fetch_exception_propagates(tickers, customers):
         raise ValueError("svc exploded")
 
     class Svc(OrderSerializer):
-        band = CachedServiceField(fetch=bad_band, read_only=True)
+        band = BatchServiceField(fetch=bad_band, read_only=True)
 
         class Meta:
             model = Order
