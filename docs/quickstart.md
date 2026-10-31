@@ -149,3 +149,5 @@ indexes:
 - [Write path](guide/write-path.md): batch update and delete, bulk versus
   per-row writes, locking.
 - [Error contract](reference/errors.md): every status code and body.
+- [Cookbook](https://github.com/matink112/drf-batch-cookbook): 19 runnable
+  scenarios, one per option, each with its own walkthrough.
