@@ -5,6 +5,20 @@ generated from [Conventional Commits](https://www.conventionalcommits.org/) by
 `make bump`, and the project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.4.0 (2026-10-31)
+
+### BREAKING CHANGE
+
+- CachedField, CachedRelatedField and CachedServiceField are
+now BatchField, BatchRelatedField and BatchServiceField;
+CachedFieldExtension is BatchFieldExtension;
+BatchSerializer.get_cached_fields() is get_batch_fields() and
+BatchSerializer.cached() is fetched(). No aliases are kept.
+
+### Refactor
+
+- rename Cached*Field to Batch*Field
+
 ## v0.3.0 (2026-10-30)
 
 ### BREAKING CHANGE
